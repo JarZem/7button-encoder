@@ -138,7 +138,11 @@ const remoteFromOtaCommand = {
         if (value === undefined || value === null) {
             return;
         }
-        return {ota_command: String(value)};
+
+        // Zigbee2MQTT treats `action` as an event-like value instead of a
+        // persistent device state property. This prevents an old HELLO from
+        // being repeated in every later state publication.
+        return {action: String(value)};
     },
 };
 
