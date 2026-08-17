@@ -17,6 +17,16 @@ static const char *TAG = "zigbee_ota_cluster";
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
 
+static bool zigbee_ota_is_joined(void)
+{
+    if (esp_zb_bdb_is_factory_new()) {
+        return false;
+    }
+
+    const uint16_t short_addr = esp_zb_get_short_address();
+    return short_addr != 0x0000 && short_addr != 0xfffe && short_addr != 0xffff;
+}
+
 static esp_err_t zigbee_ota_report_payload(const char *payload)
 {
     if (payload == NULL) {
@@ -77,20 +87,25 @@ static void zigbee_ota_hello_task(void *arg)
 {
     (void)arg;
 
-    char device_id[DEVICE_ID_MAX_LEN] = {0};
-    esp_err_t id_err = device_identity_get_device_id(device_id);
-    if (id_err != ESP_OK) {
-        ESP_LOGE(TAG, "HELLO device id unavailable: %s", esp_err_to_name(id_err));
-        s_hello_task_started = false;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    for (unsigned attempt = 1; attempt <= 60; ++attempt) {
+    for (unsigned attempt = 1; attempt <= 120; ++attempt) {
         vTaskDelay(pdMS_TO_TICKS(1000));
 
-        const uint16_t short_addr = esp_zb_get_short_address();
-        if (short_addr == 0xffff || short_addr == 0x0000) {
+        if (!zigbee_ota_is_joined()) {
+            continue;
+        }
+
+        /* Let the stack settle after reconnect/join before the first custom report. */
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        if (!zigbee_ota_is_joined()) {
+            continue;
+        }
+
+        char device_id[DEVICE_ID_MAX_LEN] = {0};
+        esp_err_t id_err = device_identity_get_device_id(device_id);
+        if (id_err != ESP_OK || device_id[0] == '\0' || strcmp(device_id, "00:00:00:00:00:00:00:00") == 0) {
+            ESP_LOGW(TAG, "HELLO device id not ready: %s value=%s",
+                     esp_err_to_name(id_err),
+                     device_id);
             continue;
         }
 
@@ -101,13 +116,14 @@ static void zigbee_ota_hello_task(void *arg)
             break;
         }
 
+        const uint16_t short_addr = esp_zb_get_short_address();
         esp_err_t err = zigbee_ota_report_payload(payload);
         if (err == ESP_OK) {
             ESP_LOGI(TAG, "HELLO sent after Zigbee join short=0x%04x", short_addr);
-        } else {
-            ESP_LOGW(TAG, "HELLO send failed: %s", esp_err_to_name(err));
+            break;
         }
-        break;
+
+        ESP_LOGW(TAG, "HELLO send failed: %s; retrying", esp_err_to_name(err));
     }
 
     s_hello_task_started = false;
@@ -121,7 +137,7 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
         cluster,
         ZIGBEE_OTA_CONFIG_ATTR_ID,
         ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
-        ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE,
+        ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
         s_ota_payload_attr);
     if (err != ESP_OK) {
         return err;
