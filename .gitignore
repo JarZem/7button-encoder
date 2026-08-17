@@ -1,0 +1,54 @@
+# ESP-IDF build
+build/
+managed_components/
+build_full/
+build_wifi_diag/
+ESP32C6_panel_KiCad10_RevA/
+ESP32C6_panel_KiCad10_RevB/
+ESP32-C6-RevB/
+diagnostics/
+
+#certificates
+cert/*
+!cert/README.txt
+!cert/*.cer
+
+# CMake / IDE
+.vscode/
+.idea/
+.agents/
+.venv_video/
+CMakeFiles/
+CMakeCache.txt
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Binaries
+*.bin
+*.elf
+*.map
+
+# Logs / temporary
+*.log
+*.tmp
+*.bak
+*.pdf
+.backup/
+
+# Secrets / local config
+.env
+.env.*
+secrets.*
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+
+# Generated docs if je nechceš verzovat
+*.md
+
+sdkconfig
+sdkconfig.old

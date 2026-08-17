@@ -1,0 +1,12 @@
+{
+  "ota_ecosystem": "JaroslavZemanESP",
+  "device_model": "remotecontrol7-encoder",
+  "product_role": "six-strip-cct-led-controller",
+  "firmware_product": "remotecontrol-encoder",
+  "hardware_revision": "ESP32-C6",
+  "chip_family": "ESP32-C6",
+  "flash_size": "16MB",
+  "firmware_version": "1",
+  "firmware_channel": "stable",
+  "secure_version": 0
+}
