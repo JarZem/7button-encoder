@@ -1,7 +1,13 @@
 #include "zigbee_ota_cluster.h"
 
+#include <stdio.h>
 #include <string.h>
+
+#include "device_identity.h"
 #include "esp_log.h"
+#include "esp_zigbee_core.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "ota_config.h"
 #include "ota_service.h"
 #include "zcl/esp_zigbee_zcl_common.h"
@@ -9,16 +15,135 @@
 static const char *TAG = "zigbee_ota_cluster";
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
+static bool s_hello_task_started;
+
+static esp_err_t zigbee_ota_report_payload(const char *payload)
+{
+    if (payload == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t payload_len = strlen(payload);
+    if (payload_len == 0 || payload_len > ZIGBEE_OTA_ZCL_STRING_CAPACITY) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    s_ota_payload_attr[0] = (uint8_t)payload_len;
+    memcpy(&s_ota_payload_attr[1], payload, payload_len);
+
+    esp_zb_lock_acquire(portMAX_DELAY);
+
+    esp_zb_zcl_status_t status = esp_zb_zcl_set_attribute_val(
+        ZIGBEE_OTA_ENDPOINT,
+        ZIGBEE_OTA_CLUSTER_ID,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ZIGBEE_OTA_CONFIG_ATTR_ID,
+        s_ota_payload_attr,
+        false);
+
+    if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+        esp_zb_lock_release();
+        ESP_LOGW(TAG, "HELLO set attr failed status=0x%x", status);
+        return ESP_FAIL;
+    }
+
+    esp_zb_zcl_report_attr_cmd_t cmd = {
+        .zcl_basic_cmd = {
+            .dst_addr_u.addr_short = 0x0000,
+            .dst_endpoint = 1,
+            .src_endpoint = ZIGBEE_OTA_ENDPOINT,
+        },
+        .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+        .clusterID = ZIGBEE_OTA_CLUSTER_ID,
+        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI,
+        .dis_default_resp = 1,
+        .attributeID = ZIGBEE_OTA_CONFIG_ATTR_ID,
+    };
+
+    esp_err_t err = esp_zb_zcl_report_attr_cmd_req(&cmd);
+    esp_zb_lock_release();
+
+    ESP_LOGI(TAG,
+             "HELLO report cluster=0x%04x attr=0x%04x payload=%s ret=%s(0x%x)",
+             ZIGBEE_OTA_CLUSTER_ID,
+             ZIGBEE_OTA_CONFIG_ATTR_ID,
+             payload,
+             esp_err_to_name(err),
+             err);
+    return err;
+}
+
+static void zigbee_ota_hello_task(void *arg)
+{
+    (void)arg;
+
+    char device_id[DEVICE_ID_MAX_LEN] = {0};
+    esp_err_t id_err = device_identity_get_device_id(device_id);
+    if (id_err != ESP_OK) {
+        ESP_LOGE(TAG, "HELLO device id unavailable: %s", esp_err_to_name(id_err));
+        s_hello_task_started = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    for (unsigned attempt = 1; attempt <= 60; ++attempt) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        const uint16_t short_addr = esp_zb_get_short_address();
+        if (short_addr == 0xffff || short_addr == 0x0000) {
+            continue;
+        }
+
+        char payload[DEVICE_ID_MAX_LEN + 3];
+        const int written = snprintf(payload, sizeof(payload), "H|%s", device_id);
+        if (written <= 0 || (size_t)written >= sizeof(payload)) {
+            ESP_LOGE(TAG, "HELLO payload build failed");
+            break;
+        }
+
+        esp_err_t err = zigbee_ota_report_payload(payload);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "HELLO sent after Zigbee join short=0x%04x", short_addr);
+        } else {
+            ESP_LOGW(TAG, "HELLO send failed: %s", esp_err_to_name(err));
+        }
+        break;
+    }
+
+    s_hello_task_started = false;
+    vTaskDelete(NULL);
+}
 
 esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
 {
     s_ota_payload_attr[0] = 0;
-    return esp_zb_custom_cluster_add_custom_attr(
+    esp_err_t err = esp_zb_custom_cluster_add_custom_attr(
         cluster,
         ZIGBEE_OTA_CONFIG_ATTR_ID,
         ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
         ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE,
         s_ota_payload_attr);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (!s_hello_task_started) {
+        s_hello_task_started = true;
+        BaseType_t created = xTaskCreate(
+            zigbee_ota_hello_task,
+            "zb_ota_hello",
+            3072,
+            NULL,
+            5,
+            NULL);
+        if (created != pdPASS) {
+            s_hello_task_started = false;
+            ESP_LOGE(TAG, "HELLO task creation failed");
+            return ESP_FAIL;
+        }
+    }
+
+    return ESP_OK;
 }
 
 bool zigbee_ota_cluster_handle_set_attr(const esp_zb_zcl_set_attr_value_message_t *message)
