@@ -1,14 +1,14 @@
 import {presets as e} from 'zigbee-herdsman-converters/lib/exposes';
+import * as m from 'zigbee-herdsman-converters/lib/modernExtend';
+import {Zcl} from 'zigbee-herdsman';
 
 const OTA_CLUSTER_ID = 0xfc00;
-const OTA_MANUFACTURER_CODE = 0x1234;
 const OTA_CONFIG_ATTR_ID = 0x0001;
-const OTA_CMD_PROVISION_CONFIG = 0x01;
-const OTA_CMD_OTA_CHECK = 0x02;
-const OTA_CONFIG_ATTR_TYPE = 0x42;
 const OTA_COMMAND_MAX_LEN = 254;
 const OTA_CODE_RE = /^[0-9A-Za-z]{3}$/;
 const OTA_TOKEN_RE = /^[0-9A-Za-z_-]{16}$/;
+const OTA_CLUSTER_NAME = 'jarzemOta';
+const OTA_ATTR_NAME = 'otaCommand';
 
 const ENDPOINTS = {
     switch1: 1,
@@ -107,9 +107,7 @@ const remoteFromBrightness = {
         if (msg.endpoint.ID !== ENDPOINTS.light || msg.data.currentLevel === undefined) {
             return;
         }
-        return {
-            brightness_light: msg.data.currentLevel,
-        };
+        return {brightness_light: msg.data.currentLevel};
     },
 };
 
@@ -133,14 +131,13 @@ const remoteFromColorTemperature = {
 };
 
 const remoteFromOtaCommand = {
-    cluster: OTA_CLUSTER_ID,
+    cluster: OTA_CLUSTER_NAME,
     type: ['attributeReport', 'readResponse'],
     convert: (model, msg) => {
-        const value = msg.data?.[OTA_CONFIG_ATTR_ID] ?? msg.data?.[String(OTA_CONFIG_ATTR_ID)];
+        const value = msg.data?.[OTA_ATTR_NAME] ?? msg.data?.[OTA_CONFIG_ATTR_ID] ?? msg.data?.[String(OTA_CONFIG_ATTR_ID)];
         if (value === undefined || value === null) {
             return;
         }
-
         return {ota_command: String(value)};
     },
 };
@@ -207,8 +204,8 @@ const remoteToOtaCommand = {
         validateOtaCommand(value);
         const endpoint = meta.device.getEndpoint(ENDPOINTS.switch1) ?? entity;
         await endpoint.write(
-            OTA_CLUSTER_ID,
-            {[OTA_CONFIG_ATTR_ID]: {value, type: OTA_CONFIG_ATTR_TYPE}},
+            OTA_CLUSTER_NAME,
+            {[OTA_ATTR_NAME]: value},
             {disableDefaultResponse: false},
         );
         return {state: {}};
@@ -217,18 +214,28 @@ const remoteToOtaCommand = {
 
 const definition = {
     fingerprint: [
-        {
-            manufacturerName: 'Jaros',
-            modelID: 'RemoteControl7Encoder',
-        },
-        {
-            manufacturerName: 'JaroslavZ',
-            modelID: 'ESP32-C6-ENC',
-        },
+        {manufacturerName: 'Jaros', modelID: 'RemoteControl7Encoder'},
+        {manufacturerName: 'JaroslavZ', modelID: 'ESP32-C6-ENC'},
     ],
     model: 'ESP32-C6-ENC',
     vendor: 'Jaros',
     description: 'RemoteControl7Encoder six outputs with brightness, white temperature, RS232 and OTA enable switches',
+    extend: [
+        m.deviceAddCustomCluster(OTA_CLUSTER_NAME, {
+            name: OTA_CLUSTER_NAME,
+            ID: OTA_CLUSTER_ID,
+            attributes: {
+                [OTA_ATTR_NAME]: {
+                    name: OTA_ATTR_NAME,
+                    ID: OTA_CONFIG_ATTR_ID,
+                    type: Zcl.DataType.CHAR_STR,
+                    write: true,
+                },
+            },
+            commands: {},
+            commandsResponse: {},
+        }),
+    ],
     fromZigbee: [remoteFromOnOff, remoteFromBrightness, remoteFromColorTemperature, remoteFromOtaCommand],
     toZigbee: [remoteToOnOff, remoteToBrightness, remoteToColorTemperature, remoteToOtaCommand],
     exposes: [
