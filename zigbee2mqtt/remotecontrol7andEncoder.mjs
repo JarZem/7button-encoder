@@ -132,6 +132,19 @@ const remoteFromColorTemperature = {
     },
 };
 
+const remoteFromOtaCommand = {
+    cluster: OTA_CLUSTER_ID,
+    type: ['attributeReport', 'readResponse'],
+    convert: (model, msg) => {
+        const value = msg.data?.[OTA_CONFIG_ATTR_ID] ?? msg.data?.[String(OTA_CONFIG_ATTR_ID)];
+        if (value === undefined || value === null) {
+            return;
+        }
+
+        return {ota_command: String(value)};
+    },
+};
+
 const remoteToOnOff = {
     key: [
         'state',
@@ -216,7 +229,7 @@ const definition = {
     model: 'ESP32-C6-ENC',
     vendor: 'Jaros',
     description: 'RemoteControl7Encoder six outputs with brightness, white temperature, RS232 and OTA enable switches',
-    fromZigbee: [remoteFromOnOff, remoteFromBrightness, remoteFromColorTemperature],
+    fromZigbee: [remoteFromOnOff, remoteFromBrightness, remoteFromColorTemperature, remoteFromOtaCommand],
     toZigbee: [remoteToOnOff, remoteToBrightness, remoteToColorTemperature, remoteToOtaCommand],
     exposes: [
         e.light().withBrightness().withColorTemp([COLOR_TEMP_MIN_MIRED, COLOR_TEMP_MAX_MIRED]).withEndpoint('light'),
