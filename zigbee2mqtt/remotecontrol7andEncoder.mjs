@@ -7,6 +7,7 @@ const OTA_CONFIG_ATTR_ID = 0x0001;
 const OTA_COMMAND_MAX_LEN = 254;
 const OTA_CODE_RE = /^[0-9A-Za-z]{3}$/;
 const OTA_TOKEN_RE = /^[0-9A-Za-z_-]{16}$/;
+const OTA_AUTH_CHALLENGE_RE = /^A\|[0-9a-fA-F]{16}\|[0-9a-fA-F]{64}$/;
 const OTA_CLUSTER_NAME = 'jarzemOta';
 const OTA_ATTR_NAME = 'otaCommand';
 
@@ -64,6 +65,13 @@ const validateOtaCommand = (value) => {
         throw new Error(`OTA command length must be 1-${OTA_COMMAND_MAX_LEN} characters`);
     }
 
+    if (value.startsWith('A|')) {
+        if (!OTA_AUTH_CHALLENGE_RE.test(value)) {
+            throw new Error('OTA auth challenge must be A|<16 hex message_id>|<64 hex challenge>');
+        }
+        return;
+    }
+
     if (value.startsWith('C|')) {
         const token = value.slice(2);
         if (!OTA_TOKEN_RE.test(token)) {
@@ -75,7 +83,7 @@ const validateOtaCommand = (value) => {
     const provisioning = value.startsWith('P|') ? value.slice(2) : value;
     const fields = provisioning.split('|');
     if (fields.length !== 5) {
-        throw new Error('OTA command must be SSID|PASSWORD|HOST|CODE|TOKEN, P|SSID|PASSWORD|HOST|CODE|TOKEN, or C|TOKEN');
+        throw new Error('OTA command must be provisioning, C|TOKEN, or A|MESSAGE_ID|CHALLENGE');
     }
     if (!OTA_CODE_RE.test(fields[3])) {
         throw new Error('OTA firmware code must be exactly 3 alphanumeric characters');
@@ -139,9 +147,6 @@ const remoteFromOtaCommand = {
             return;
         }
 
-        // Zigbee2MQTT treats `action` as an event-like value instead of a
-        // persistent device state property. This prevents an old HELLO from
-        // being repeated in every later state publication.
         return {action: String(value)};
     },
 };
