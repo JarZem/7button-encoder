@@ -114,12 +114,12 @@ def ota_get(ota_base: str, endpoint: str, root_ca_path: Path) -> bytes:
         return response.read()
 
 
-def register_with_ota(ota_base: str, token: str, root_ca_path: Path, certificate_pem: bytes) -> dict:
+def register_with_ota(ota_base: str, root_ca_path: Path, certificate_pem: bytes) -> dict:
     body = json.dumps({'device_certificate_pem': certificate_pem.decode('ascii')}).encode('utf-8')
     req = urllib.request.Request(
         f'{ota_base.rstrip("/")}/api/manufacturing/register-device',
         data=body,
-        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'},
+        headers={'Content-Type': 'application/json'},
         method='POST',
     )
     with urllib.request.urlopen(req, timeout=15, context=https_context(root_ca_path)) as response:
@@ -138,7 +138,6 @@ def main() -> None:
     parser.add_argument('--ecosystem', default='JaroslavZemanESP')
     parser.add_argument('--ca-dir', type=Path)
     parser.add_argument('--ota-url', help='Manufacturing HTTPS base URL, e.g. https://192.168.2.120:8451')
-    parser.add_argument('--manufacturing-token', type=Path)
     parser.add_argument('--out', type=Path, default=Path('device_credentials'))
     parser.add_argument('--days', type=int, default=3650)
     args = parser.parse_args()
@@ -156,7 +155,6 @@ def main() -> None:
     ecosystem = args.ecosystem or ask('Ecosystem', 'JaroslavZemanESP')
     ca_dir = (args.ca_dir or Path(ask('Offline CA directory', '../ota_server/ca'))).expanduser().resolve()
     ota_base = args.ota_url or ask('OTA manufacturing HTTPS URL', 'https://192.168.2.120:8451')
-    token_path = (args.manufacturing_token or Path(ask('Manufacturing token file', '../ota_server/ota_credentials/manufacturing_token.txt'))).expanduser().resolve()
     output_dir = args.out.expanduser().resolve()
 
     ca_cert, ca_key = load_ca(ca_dir)
@@ -182,8 +180,7 @@ def main() -> None:
     except OSError:
         pass
 
-    token = token_path.read_text(encoding='utf-8').strip()
-    registration = register_with_ota(ota_base, token, root_ca_path, cert_pem)
+    registration = register_with_ota(ota_base, root_ca_path, cert_pem)
     if registration.get('status') != 'REGISTERED':
         raise RuntimeError(f'OTA registration failed: {registration}')
 
