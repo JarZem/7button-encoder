@@ -25,6 +25,7 @@ static const char *TAG = "zigbee_ota_cluster";
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
+static uint32_t s_hello_delay_ms;
 
 static bool zigbee_ota_is_joined(void)
 {
@@ -77,6 +78,8 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
         ZIGBEE_OTA_CONFIG_ATTR_ID, s_ota_payload_attr, false);
     if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
         esp_zb_lock_release();
+        ESP_LOGW(TAG, "custom attr set failed cluster=0x%04x attr=0x%04x zcl_status=0x%x",
+                 ZIGBEE_OTA_CLUSTER_ID, ZIGBEE_OTA_CONFIG_ATTR_ID, status);
         return ESP_FAIL;
     }
 
@@ -94,6 +97,15 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
     };
     esp_err_t err = esp_zb_zcl_report_attr_cmd_req(&cmd);
     esp_zb_lock_release();
+
+    ESP_LOGI(TAG,
+             "custom report cluster=0x%04x attr=0x%04x bytes=%u ret=%s(0x%x) payload=%s",
+             ZIGBEE_OTA_CLUSTER_ID,
+             ZIGBEE_OTA_CONFIG_ATTR_ID,
+             (unsigned)payload_len,
+             esp_err_to_name(err),
+             err,
+             payload);
     return err;
 }
 
@@ -112,8 +124,11 @@ static esp_err_t send_signature_fragments(const char *tx, const char *signature_
         int n = snprintf(payload, sizeof(payload), "S|%s|%u|%u|%s",
                          tx, index, total, chunk);
         if (n <= 0 || n > ZIGBEE_OTA_HELLO_FRAME_MAX) return ESP_ERR_INVALID_SIZE;
-        ESP_RETURN_ON_ERROR(zigbee_ota_report_payload(payload), TAG, "HELLO signature fragment send failed");
-        vTaskDelay(pdMS_TO_TICKS(80));
+        esp_err_t err = zigbee_ota_report_payload(payload);
+        ESP_LOGI(TAG, "HELLO signature fragment tx=%s index=%u/%u send=%s(0x%x)",
+                 tx, index + 1, total, esp_err_to_name(err), err);
+        ESP_RETURN_ON_ERROR(err, TAG, "HELLO signature fragment send failed");
+        vTaskDelay(pdMS_TO_TICKS(120));
     }
     return ESP_OK;
 }
@@ -161,8 +176,10 @@ static esp_err_t send_secure_hello(const char *device_id)
              "HELLO signed start device_id=%s tx=%s counter=%" PRIu64 " nonce=%s signature_der=%u parts=%u",
              device_id, tx, counter, nonce, (unsigned)signature_der_len, sig_parts);
 
-    ESP_RETURN_ON_ERROR(zigbee_ota_report_payload(start), TAG, "HELLO start send failed");
-    vTaskDelay(pdMS_TO_TICKS(80));
+    esp_err_t err = zigbee_ota_report_payload(start);
+    ESP_LOGI(TAG, "HELLO start tx=%s send=%s(0x%x)", tx, esp_err_to_name(err), err);
+    ESP_RETURN_ON_ERROR(err, TAG, "HELLO start send failed");
+    vTaskDelay(pdMS_TO_TICKS(120));
     ESP_RETURN_ON_ERROR(send_signature_fragments(tx, signature_b64, sig_parts), TAG, "HELLO signature send failed");
 
     ESP_LOGI(TAG, "HELLO signed complete device_id=%s tx=%s", device_id, tx);
@@ -172,17 +189,38 @@ static esp_err_t send_secure_hello(const char *device_id)
 static void zigbee_ota_hello_task(void *arg)
 {
     (void)arg;
-    for (unsigned attempt = 1; attempt <= 120; ++attempt) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        if (!zigbee_ota_is_joined()) continue;
-        vTaskDelay(pdMS_TO_TICKS(1500));
-        if (!zigbee_ota_is_joined()) continue;
+    const uint32_t initial_delay_ms = s_hello_delay_ms;
+    ESP_LOGI(TAG, "HELLO task scheduled delay_ms=%lu", (unsigned long)initial_delay_ms);
+    if (initial_delay_ms > 0) {
+        vTaskDelay(pdMS_TO_TICKS(initial_delay_ms));
+    }
+
+    for (unsigned attempt = 1; attempt <= 30; ++attempt) {
+        if (!zigbee_ota_is_joined()) {
+            ESP_LOGW(TAG,
+                     "HELLO waiting for usable Zigbee network attempt=%u factory_new=%d short=0x%04x",
+                     attempt,
+                     esp_zb_bdb_is_factory_new(),
+                     esp_zb_get_short_address());
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
 
         char device_id[DEVICE_ID_MAX_LEN] = {0};
         esp_err_t id_err = device_identity_get_device_id(device_id);
         if (id_err != ESP_OK || device_id[0] == '\0' ||
-            strcmp(device_id, "00:00:00:00:00:00:00:00") == 0) continue;
+            strcmp(device_id, "00:00:00:00:00:00:00:00") == 0) {
+            ESP_LOGW(TAG, "HELLO waiting for device identity attempt=%u err=%s",
+                     attempt, esp_err_to_name(id_err));
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
 
+        ESP_LOGI(TAG,
+                 "HELLO network ready attempt=%u channel=%u short=0x%04x; sending after startup-report quiet period",
+                 attempt,
+                 esp_zb_get_current_channel(),
+                 esp_zb_get_short_address());
         esp_err_t err = send_secure_hello(device_id);
         if (err == ESP_OK) break;
         ESP_LOGW(TAG, "HELLO signed send failed attempt=%u: %s", attempt, esp_err_to_name(err));
@@ -195,20 +233,27 @@ static void zigbee_ota_hello_task(void *arg)
 esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
 {
     s_ota_payload_attr[0] = 0;
-    esp_err_t err = esp_zb_custom_cluster_add_custom_attr(
+    return esp_zb_custom_cluster_add_custom_attr(
         cluster, ZIGBEE_OTA_CONFIG_ATTR_ID, ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
         ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
         s_ota_payload_attr);
-    if (err != ESP_OK) return err;
+}
 
-    if (!s_hello_task_started) {
-        s_hello_task_started = true;
-        if (xTaskCreate(zigbee_ota_hello_task, "zb_ota_hello", 4096, NULL, 5, NULL) != pdPASS) {
-            s_hello_task_started = false;
-            return ESP_FAIL;
-        }
+void zigbee_ota_schedule_hello(uint32_t delay_ms)
+{
+    if (s_hello_task_started) {
+        ESP_LOGI(TAG, "HELLO schedule ignored: task already active");
+        return;
     }
-    return ESP_OK;
+
+    s_hello_delay_ms = delay_ms;
+    s_hello_task_started = true;
+    if (xTaskCreate(zigbee_ota_hello_task, "zb_ota_hello", 4096, NULL, 5, NULL) != pdPASS) {
+        s_hello_task_started = false;
+        ESP_LOGE(TAG, "HELLO task creation failed");
+        return;
+    }
+    ESP_LOGI(TAG, "HELLO scheduled from network state delay_ms=%lu", (unsigned long)delay_ms);
 }
 
 bool zigbee_ota_cluster_handle_set_attr(const esp_zb_zcl_set_attr_value_message_t *message)
