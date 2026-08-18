@@ -49,7 +49,9 @@ def load_ca(ca_dir: Path) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]
     cert_path = ca_dir / ROOT_CA_CERT_NAME
     key_path = ca_dir / ROOT_CA_KEY_NAME
     cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
-    password_text = getpass.getpass('Root CA private key password (empty only if unencrypted): ')
+    print('\nThe next password only unlocks the existing root_ca_private.pem so this script can sign the new ESP device certificate.')
+    print('It is not stored, embedded in the ESP, registered in OTA, or sent over the network.')
+    password_text = getpass.getpass('Password protecting root_ca_private.pem (leave empty only if that key is unencrypted): ')
     password = password_text.encode('utf-8') if password_text else None
     key = serialization.load_pem_private_key(key_path.read_bytes(), password=password)
     if not isinstance(key, ec.EllipticCurvePrivateKey):
