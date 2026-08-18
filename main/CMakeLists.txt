@@ -1,5 +1,25 @@
 set(OTA_CERT_DIR "${PROJECT_DIR}/cert")
 set(OTA_CA_BUNDLE "${CMAKE_CURRENT_BINARY_DIR}/ota_server_ca_bundle.pem")
+set(DEVICE_CREDENTIAL_DIR "${PROJECT_DIR}/device_credentials")
+set(DEVICE_CERT_SOURCE "${DEVICE_CREDENTIAL_DIR}/device_cert.pem")
+set(DEVICE_KEY_SOURCE "${DEVICE_CREDENTIAL_DIR}/device_private.pem")
+set(DEVICE_CERT_EMBED "${CMAKE_CURRENT_BINARY_DIR}/device_cert.pem")
+set(DEVICE_KEY_EMBED "${CMAKE_CURRENT_BINARY_DIR}/device_private.pem")
+
+if(NOT EXISTS "${DEVICE_CERT_SOURCE}")
+    message(FATAL_ERROR
+        "Missing ${DEVICE_CERT_SOURCE}. Put the CA-signed per-device certificate there before building."
+    )
+endif()
+if(NOT EXISTS "${DEVICE_KEY_SOURCE}")
+    message(FATAL_ERROR
+        "Missing ${DEVICE_KEY_SOURCE}. Put the matching per-device private key there before building."
+    )
+endif()
+
+configure_file("${DEVICE_CERT_SOURCE}" "${DEVICE_CERT_EMBED}" COPYONLY)
+configure_file("${DEVICE_KEY_SOURCE}" "${DEVICE_KEY_EMBED}" COPYONLY)
+
 file(WRITE "${OTA_CA_BUNDLE}" "")
 set(OTA_CA_BUNDLE_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/make_ota_ca_bundle.cmake")
 file(WRITE "${OTA_CA_BUNDLE_SCRIPT}" [=[
@@ -32,11 +52,18 @@ foreach(CERT_FILE IN LISTS CERT_INPUTS)
 endforeach()
 ]=])
 
+set(COMMON_EMBED_TXTFILES
+    "${OTA_CA_BUNDLE}"
+    "${DEVICE_CERT_EMBED}"
+    "${DEVICE_KEY_EMBED}"
+)
+
 if(CONFIG_APP_ZIGBEE_MINIMAL_TEST)
     idf_component_register(
         SRCS
             "app_main.c"
             "device_auth.c"
+            "device_credentials.c"
             "device_enrollment.c"
             "device_identity.c"
             "event_bus.c"
@@ -68,7 +95,7 @@ if(CONFIG_APP_ZIGBEE_MINIMAL_TEST)
             espressif__led_strip
             espressif__esp-zigbee-lib
         EMBED_TXTFILES
-            "${OTA_CA_BUNDLE}"
+            ${COMMON_EMBED_TXTFILES}
     )
     if(NOT CMAKE_SCRIPT_MODE_FILE)
         add_custom_target(ota_ca_bundle
@@ -84,6 +111,7 @@ else()
         SRCS
             "app_main.c"
             "device_auth.c"
+            "device_credentials.c"
             "device_enrollment.c"
             "device_identity.c"
             "input.c"
@@ -123,7 +151,7 @@ else()
             espressif__led_strip
             espressif__esp-zigbee-lib
         EMBED_TXTFILES
-            "${OTA_CA_BUNDLE}"
+            ${COMMON_EMBED_TXTFILES}
     )
     if(NOT CMAKE_SCRIPT_MODE_FILE)
         add_custom_target(ota_ca_bundle
