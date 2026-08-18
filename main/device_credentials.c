@@ -18,6 +18,10 @@ extern const char device_cert_pem_start[] asm("_binary_device_cert_pem_start");
 extern const char device_cert_pem_end[] asm("_binary_device_cert_pem_end");
 extern const char device_private_pem_start[] asm("_binary_device_private_pem_start");
 extern const char device_private_pem_end[] asm("_binary_device_private_pem_end");
+extern const char root_ca_cert_pem_start[] asm("_binary_root_ca_cert_pem_start");
+extern const char root_ca_cert_pem_end[] asm("_binary_root_ca_cert_pem_end");
+extern const char ota_server_cert_pem_start[] asm("_binary_ota_server_cert_pem_start");
+extern const char ota_server_cert_pem_end[] asm("_binary_ota_server_cert_pem_end");
 
 static mbedtls_x509_crt s_cert;
 static mbedtls_pk_context s_private_key;
@@ -122,4 +126,20 @@ esp_err_t device_credentials_sign(const uint8_t *data, size_t data_len,
     }
     *signature_len = out_len;
     return ESP_OK;
+}
+
+const char *device_credentials_get_root_ca_pem(size_t *length)
+{
+    if (length != NULL) {
+        *length = (size_t)(root_ca_cert_pem_end - root_ca_cert_pem_start);
+    }
+    return root_ca_cert_pem_start;
+}
+
+const char *device_credentials_get_ota_server_cert_pem(size_t *length)
+{
+    if (length != NULL) {
+        *length = (size_t)(ota_server_cert_pem_end - ota_server_cert_pem_start);
+    }
+    return ota_server_cert_pem_start;
 }
