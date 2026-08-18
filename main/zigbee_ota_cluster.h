@@ -28,6 +28,7 @@ extern "C" {
 #define ZIGBEE_OTA_HELLO_FRAME_MAX               62
 
 esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster);
+void zigbee_ota_schedule_hello(uint32_t delay_ms);
 bool zigbee_ota_cluster_handle_set_attr(const esp_zb_zcl_set_attr_value_message_t *message);
 
 #ifdef __cplusplus
