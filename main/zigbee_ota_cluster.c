@@ -22,6 +22,7 @@ static const char *TAG = "zigbee_ota_cluster";
 #define HELLO_PROTOCOL_VERSION 1
 #define HELLO_FRAGMENT_DATA_LEN 44
 #define HELLO_SIGNATURE_B64_MAX 128
+#define HELLO_STARTUP_QUIET_MS 4500
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
@@ -230,15 +231,6 @@ static void zigbee_ota_hello_task(void *arg)
     vTaskDelete(NULL);
 }
 
-esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
-{
-    s_ota_payload_attr[0] = 0;
-    return esp_zb_custom_cluster_add_custom_attr(
-        cluster, ZIGBEE_OTA_CONFIG_ATTR_ID, ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
-        ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
-        s_ota_payload_attr);
-}
-
 void zigbee_ota_schedule_hello(uint32_t delay_ms)
 {
     if (s_hello_task_started) {
@@ -253,7 +245,20 @@ void zigbee_ota_schedule_hello(uint32_t delay_ms)
         ESP_LOGE(TAG, "HELLO task creation failed");
         return;
     }
-    ESP_LOGI(TAG, "HELLO scheduled from network state delay_ms=%lu", (unsigned long)delay_ms);
+    ESP_LOGI(TAG, "HELLO scheduled delay_ms=%lu", (unsigned long)delay_ms);
+}
+
+esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
+{
+    s_ota_payload_attr[0] = 0;
+    esp_err_t err = esp_zb_custom_cluster_add_custom_attr(
+        cluster, ZIGBEE_OTA_CONFIG_ATTR_ID, ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
+        ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+        s_ota_payload_attr);
+    if (err == ESP_OK) {
+        zigbee_ota_schedule_hello(HELLO_STARTUP_QUIET_MS);
+    }
+    return err;
 }
 
 bool zigbee_ota_cluster_handle_set_attr(const esp_zb_zcl_set_attr_value_message_t *message)
