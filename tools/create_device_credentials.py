@@ -23,7 +23,8 @@ DEVICE_CERT_NAME = 'device_cert.pem'
 DEVICE_KEY_NAME = 'device_private.pem'
 OTA_CERT_NAME = 'ota_server_cert.pem'
 OTA_PUBLIC_NAME = 'ota_server_public.pem'
-ROLE_URI = 'urn:esp-pki:role:device'
+PKI_URI_PREFIX = 'urn:jarzem:esp:pki:'
+ROLE_URI = PKI_URI_PREFIX + 'role:device'
 
 
 def ask(prompt: str, default: str | None = None) -> str:
@@ -73,13 +74,13 @@ def make_device_certificate(ca_cert: x509.Certificate, ca_key: ec.EllipticCurveP
     ])
     uris = [
         ROLE_URI,
-        f'urn:esp-pki:device:{compact_id}',
-        f'urn:esp-pki:group:{uri_value(device_group)}',
-        f'urn:esp-pki:model:{uri_value(device_model)}',
-        f'urn:esp-pki:product-role:{uri_value(product_role)}',
-        f'urn:esp-pki:hardware:{uri_value(hardware_revision)}',
-        f'urn:esp-pki:chip:{uri_value(chip_family)}',
-        f'urn:esp-pki:flash:{uri_value(flash_size)}',
+        f'{PKI_URI_PREFIX}device:{compact_id}',
+        f'{PKI_URI_PREFIX}group:{uri_value(device_group)}',
+        f'{PKI_URI_PREFIX}model:{uri_value(device_model)}',
+        f'{PKI_URI_PREFIX}product-role:{uri_value(product_role)}',
+        f'{PKI_URI_PREFIX}hardware:{uri_value(hardware_revision)}',
+        f'{PKI_URI_PREFIX}chip:{uri_value(chip_family)}',
+        f'{PKI_URI_PREFIX}flash:{uri_value(flash_size)}',
     ]
     cert = (
         x509.CertificateBuilder()
