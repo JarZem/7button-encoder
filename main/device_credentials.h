@@ -20,6 +20,9 @@ esp_err_t device_credentials_sign(const uint8_t *data, size_t data_len,
                                   uint8_t *signature_der, size_t signature_size,
                                   size_t *signature_len);
 
+const char *device_credentials_get_root_ca_pem(size_t *length);
+const char *device_credentials_get_ota_server_cert_pem(size_t *length);
+
 #ifdef __cplusplus
 }
 #endif
