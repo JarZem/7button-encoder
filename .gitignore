@@ -8,7 +8,9 @@ ESP32C6_panel_KiCad10_RevB/
 ESP32-C6-RevB/
 diagnostics/
 
-#certificates
+# certificates
+device_credentials/*
+!device_credentials/README.txt
 cert/*
 !cert/README.txt
 !cert/*.cer
@@ -47,7 +49,7 @@ secrets.*
 *.p12
 *.pfx
 
-# Generated docs if je nechceö verzovat
+# Generated docs if je nechce≈° verzovat
 *.md
 
 sdkconfig
