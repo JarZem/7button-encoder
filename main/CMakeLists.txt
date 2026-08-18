@@ -1,61 +1,45 @@
-set(OTA_CERT_DIR "${PROJECT_DIR}/cert")
-set(OTA_CA_BUNDLE "${CMAKE_CURRENT_BINARY_DIR}/ota_server_ca_bundle.pem")
 set(DEVICE_CREDENTIAL_DIR "${PROJECT_DIR}/device_credentials")
 set(DEVICE_CERT_SOURCE "${DEVICE_CREDENTIAL_DIR}/device_cert.pem")
 set(DEVICE_KEY_SOURCE "${DEVICE_CREDENTIAL_DIR}/device_private.pem")
+set(ROOT_CA_SOURCE "${DEVICE_CREDENTIAL_DIR}/root_ca_cert.pem")
+set(OTA_SERVER_CERT_SOURCE "${DEVICE_CREDENTIAL_DIR}/ota_server_cert.pem")
+
 set(DEVICE_CERT_EMBED "${CMAKE_CURRENT_BINARY_DIR}/device_cert.pem")
 set(DEVICE_KEY_EMBED "${CMAKE_CURRENT_BINARY_DIR}/device_private.pem")
+set(ROOT_CA_EMBED "${CMAKE_CURRENT_BINARY_DIR}/root_ca_cert.pem")
+set(OTA_SERVER_CERT_EMBED "${CMAKE_CURRENT_BINARY_DIR}/ota_server_cert.pem")
+set(OTA_CA_BUNDLE "${CMAKE_CURRENT_BINARY_DIR}/ota_server_ca_bundle.pem")
 
-if(NOT EXISTS "${DEVICE_CERT_SOURCE}")
-    message(FATAL_ERROR
-        "Missing ${DEVICE_CERT_SOURCE}. Put the CA-signed per-device certificate there before building."
-    )
-endif()
-if(NOT EXISTS "${DEVICE_KEY_SOURCE}")
-    message(FATAL_ERROR
-        "Missing ${DEVICE_KEY_SOURCE}. Put the matching per-device private key there before building."
-    )
-endif()
+foreach(REQUIRED_FILE IN ITEMS
+        "${DEVICE_CERT_SOURCE}"
+        "${DEVICE_KEY_SOURCE}"
+        "${ROOT_CA_SOURCE}"
+        "${OTA_SERVER_CERT_SOURCE}")
+    if(NOT EXISTS "${REQUIRED_FILE}")
+        message(FATAL_ERROR
+            "Missing ${REQUIRED_FILE}. Run tools/create_device_credentials.py before building this device."
+        )
+    endif()
+endforeach()
 
 configure_file("${DEVICE_CERT_SOURCE}" "${DEVICE_CERT_EMBED}" COPYONLY)
 configure_file("${DEVICE_KEY_SOURCE}" "${DEVICE_KEY_EMBED}" COPYONLY)
+configure_file("${ROOT_CA_SOURCE}" "${ROOT_CA_EMBED}" COPYONLY)
+configure_file("${OTA_SERVER_CERT_SOURCE}" "${OTA_SERVER_CERT_EMBED}" COPYONLY)
 
-file(WRITE "${OTA_CA_BUNDLE}" "")
-set(OTA_CA_BUNDLE_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/make_ota_ca_bundle.cmake")
-file(WRITE "${OTA_CA_BUNDLE_SCRIPT}" [=[
-file(GLOB CERT_INPUTS
-    "${CERT_DIR}/*.pem"
-    "${CERT_DIR}/*.crt"
-    "${CERT_DIR}/*.cer"
-)
-if(NOT CERT_INPUTS)
-    message(FATAL_ERROR
-        "OTA HTTPS certificate not found. Put one or more .pem/.crt/.cer files into ${CERT_DIR}"
-    )
+file(READ "${ROOT_CA_SOURCE}" ROOT_CA_CONTENT)
+file(READ "${OTA_SERVER_CERT_SOURCE}" OTA_SERVER_CERT_CONTENT)
+if(ROOT_CA_CONTENT MATCHES "PRIVATE KEY" OR OTA_SERVER_CERT_CONTENT MATCHES "PRIVATE KEY")
+    message(FATAL_ERROR "Public trust input unexpectedly contains a private key")
 endif()
-
-file(WRITE "${OUTPUT}" "")
-foreach(CERT_FILE IN LISTS CERT_INPUTS)
-    file(READ "${CERT_FILE}" CERT_CONTENT)
-    if(CERT_CONTENT MATCHES "PRIVATE KEY")
-        message(FATAL_ERROR
-            "Private key found in ${CERT_FILE}. Put only public OTA server CA/server certificates into ${CERT_DIR}"
-        )
-    endif()
-    if(NOT CERT_CONTENT MATCHES "-----BEGIN CERTIFICATE-----")
-        message(FATAL_ERROR
-            "Certificate file ${CERT_FILE} is not PEM text with BEGIN CERTIFICATE"
-        )
-    endif()
-    file(APPEND "${OUTPUT}" "${CERT_CONTENT}\n")
-    message(STATUS "Embedded OTA certificate: ${CERT_FILE}")
-endforeach()
-]=])
+file(WRITE "${OTA_CA_BUNDLE}" "${ROOT_CA_CONTENT}\n${OTA_SERVER_CERT_CONTENT}\n")
 
 set(COMMON_EMBED_TXTFILES
     "${OTA_CA_BUNDLE}"
     "${DEVICE_CERT_EMBED}"
     "${DEVICE_KEY_EMBED}"
+    "${ROOT_CA_EMBED}"
+    "${OTA_SERVER_CERT_EMBED}"
 )
 
 if(CONFIG_APP_ZIGBEE_MINIMAL_TEST)
@@ -97,15 +81,6 @@ if(CONFIG_APP_ZIGBEE_MINIMAL_TEST)
         EMBED_TXTFILES
             ${COMMON_EMBED_TXTFILES}
     )
-    if(NOT CMAKE_SCRIPT_MODE_FILE)
-        add_custom_target(ota_ca_bundle
-            ALL
-            COMMAND "${CMAKE_COMMAND}" "-DCERT_DIR=${OTA_CERT_DIR}" "-DOUTPUT=${OTA_CA_BUNDLE}" -P "${OTA_CA_BUNDLE_SCRIPT}"
-            BYPRODUCTS "${OTA_CA_BUNDLE}"
-            VERBATIM
-        )
-        add_dependencies(${COMPONENT_LIB} ota_ca_bundle)
-    endif()
 else()
     idf_component_register(
         SRCS
@@ -153,13 +128,4 @@ else()
         EMBED_TXTFILES
             ${COMMON_EMBED_TXTFILES}
     )
-    if(NOT CMAKE_SCRIPT_MODE_FILE)
-        add_custom_target(ota_ca_bundle
-            ALL
-            COMMAND "${CMAKE_COMMAND}" "-DCERT_DIR=${OTA_CERT_DIR}" "-DOUTPUT=${OTA_CA_BUNDLE}" -P "${OTA_CA_BUNDLE_SCRIPT}"
-            BYPRODUCTS "${OTA_CA_BUNDLE}"
-            VERBATIM
-        )
-        add_dependencies(${COMPONENT_LIB} ota_ca_bundle)
-    endif()
 endif()
