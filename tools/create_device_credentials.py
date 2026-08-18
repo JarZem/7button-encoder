@@ -25,6 +25,7 @@ OTA_CERT_NAME = 'ota_server_cert.pem'
 OTA_PUBLIC_NAME = 'ota_server_public.pem'
 PKI_URI_PREFIX = 'urn:jarzem:esp:pki:'
 ROLE_URI = PKI_URI_PREFIX + 'role:device'
+ACCEPTED_REGISTRATION_STATUSES = {'REGISTERED', 'UNCHANGED', 'REPLACED'}
 
 
 def ask(prompt: str, default: str | None = None) -> str:
@@ -184,7 +185,8 @@ def main() -> None:
         pass
 
     registration = register_with_ota(ota_base, root_ca_path, cert_pem)
-    if registration.get('status') != 'REGISTERED':
+    registration_status = registration.get('status')
+    if registration_status not in ACCEPTED_REGISTRATION_STATUSES:
         raise RuntimeError(f'OTA registration failed: {registration}')
 
     (output_dir / OTA_CERT_NAME).write_bytes(
@@ -201,7 +203,7 @@ def main() -> None:
     print(f'  product_role:       {product_role}')
     print(f'  hardware_revision:  {hardware_revision}')
     print(f'  certificate SHA256: {cert.fingerprint(hashes.SHA256()).hex()}')
-    print(f'  OTA registry:       {registration.get("status")}')
+    print(f'  OTA registry:       {registration_status}')
     print(f'  build directory:    {output_dir}')
     print(f'  PRIVATE until flash: {key_path}')
     print('After a successful flash, delete device_private.pem from the workstation; OTA keeps only the public certificate.')
