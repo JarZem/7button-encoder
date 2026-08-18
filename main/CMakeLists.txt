@@ -3,12 +3,64 @@ set(DEVICE_CERT_SOURCE "${DEVICE_CREDENTIAL_DIR}/device_cert.pem")
 set(DEVICE_KEY_SOURCE "${DEVICE_CREDENTIAL_DIR}/device_private.pem")
 set(ROOT_CA_SOURCE "${DEVICE_CREDENTIAL_DIR}/root_ca_cert.pem")
 set(OTA_SERVER_CERT_SOURCE "${DEVICE_CREDENTIAL_DIR}/ota_server_cert.pem")
+set(DEVICE_PROVISION_SCRIPT "${PROJECT_DIR}/tools/create_device_credentials.py")
 
 set(DEVICE_CERT_EMBED "${CMAKE_CURRENT_BINARY_DIR}/device_cert.pem")
 set(DEVICE_KEY_EMBED "${CMAKE_CURRENT_BINARY_DIR}/device_private.pem")
 set(ROOT_CA_EMBED "${CMAKE_CURRENT_BINARY_DIR}/root_ca_cert.pem")
 set(OTA_SERVER_CERT_EMBED "${CMAKE_CURRENT_BINARY_DIR}/ota_server_cert.pem")
 set(OTA_CA_BUNDLE "${CMAKE_CURRENT_BINARY_DIR}/ota_server_ca_bundle.pem")
+
+# Device credentials are manufacturing artifacts, not source files.  On the
+# first configure, provision them automatically.  Never regenerate a partial
+# credential set automatically: that could replace the identity of an already
+# provisioned physical device.
+set(DEVICE_CREDENTIAL_PRESENT_COUNT 0)
+foreach(CREDENTIAL_FILE IN ITEMS
+        "${DEVICE_CERT_SOURCE}"
+        "${DEVICE_KEY_SOURCE}"
+        "${ROOT_CA_SOURCE}"
+        "${OTA_SERVER_CERT_SOURCE}")
+    if(EXISTS "${CREDENTIAL_FILE}")
+        math(EXPR DEVICE_CREDENTIAL_PRESENT_COUNT "${DEVICE_CREDENTIAL_PRESENT_COUNT} + 1")
+    endif()
+endforeach()
+
+if(DEVICE_CREDENTIAL_PRESENT_COUNT EQUAL 0)
+    if(NOT EXISTS "${DEVICE_PROVISION_SCRIPT}")
+        message(FATAL_ERROR "Missing device provisioning script: ${DEVICE_PROVISION_SCRIPT}")
+    endif()
+
+    if(DEFINED PYTHON AND EXISTS "${PYTHON}")
+        set(DEVICE_PROVISION_PYTHON "${PYTHON}")
+    else()
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        set(DEVICE_PROVISION_PYTHON "${Python3_EXECUTABLE}")
+    endif()
+
+    message(STATUS "Device credentials are missing; starting interactive ESP device provisioning")
+    message(STATUS "Provisioning script: ${DEVICE_PROVISION_SCRIPT}")
+
+    execute_process(
+        COMMAND "${DEVICE_PROVISION_PYTHON}" "${DEVICE_PROVISION_SCRIPT}"
+        WORKING_DIRECTORY "${PROJECT_DIR}"
+        RESULT_VARIABLE DEVICE_PROVISION_RESULT
+        COMMAND_ECHO STDOUT
+    )
+
+    if(NOT DEVICE_PROVISION_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "Device credential provisioning failed with exit code ${DEVICE_PROVISION_RESULT}. "
+            "No firmware will be built."
+        )
+    endif()
+elseif(NOT DEVICE_CREDENTIAL_PRESENT_COUNT EQUAL 4)
+    message(FATAL_ERROR
+        "Incomplete device_credentials directory (${DEVICE_CREDENTIAL_PRESENT_COUNT}/4 required files present). "
+        "CMake will not regenerate credentials automatically because that could replace an existing device identity. "
+        "Restore the missing credential files or intentionally remove the whole device_credentials set and configure again."
+    )
+endif()
 
 foreach(REQUIRED_FILE IN ITEMS
         "${DEVICE_CERT_SOURCE}"
@@ -17,7 +69,7 @@ foreach(REQUIRED_FILE IN ITEMS
         "${OTA_SERVER_CERT_SOURCE}")
     if(NOT EXISTS "${REQUIRED_FILE}")
         message(FATAL_ERROR
-            "Missing ${REQUIRED_FILE}. Run tools/create_device_credentials.py before building this device."
+            "Provisioning completed but required file is still missing: ${REQUIRED_FILE}"
         )
     endif()
 endforeach()
