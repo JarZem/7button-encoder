@@ -6,6 +6,7 @@
 
 #include "device_credentials.h"
 #include "device_identity.h"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_zigbee_core.h"
