@@ -58,7 +58,7 @@ esp_err_t device_credentials_init(void)
         return ESP_FAIL;
     }
 
-    ret = mbedtls_pk_check_pair(&s_cert.pk, &s_private_key);
+    ret = mbedtls_pk_check_pair(&s_cert.pk, &s_private_key, esp_rng, NULL);
     if (ret != 0) {
         ESP_LOGE(TAG, "device certificate/private key mismatch: -0x%04x", (unsigned)-ret);
         return ESP_FAIL;
