@@ -1,63 +1,16 @@
 #include "zigbee_ota_cluster.h"
 
-#include <inttypes.h>
-#include <stdio.h>
 #include <string.h>
 
-#include "device_credentials.h"
-#include "device_identity.h"
-#include "esp_check.h"
 #include "esp_log.h"
 #include "esp_zigbee_core.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "mbedtls/base64.h"
 #include "ota_config.h"
 #include "ota_service.h"
 #include "zcl/esp_zigbee_zcl_common.h"
 
 static const char *TAG = "zigbee_ota_cluster";
 
-#define HELLO_STARTUP_QUIET_MS 4500
-#define HELLO_SIGNATURE_B64_MAX 96
-
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
-static bool s_hello_task_started;
-static uint32_t s_hello_delay_ms;
-
-static bool zigbee_ota_is_joined(void)
-{
-    if (esp_zb_bdb_is_factory_new()) return false;
-    const uint16_t short_addr = esp_zb_get_short_address();
-    return short_addr != 0x0000 && short_addr != 0xfffe && short_addr != 0xffff;
-}
-
-static esp_err_t base64url_encode(const uint8_t *input, size_t input_len,
-                                  char *out, size_t out_size)
-{
-    if (input == NULL || out == NULL || out_size < 2) return ESP_ERR_INVALID_ARG;
-
-    size_t written = 0;
-    int ret = mbedtls_base64_encode((unsigned char *)out, out_size, &written, input, input_len);
-    if (ret != 0 || written >= out_size) {
-        ESP_LOGE(TAG,
-                 "base64 encode failed ret=-0x%04x input_len=%u out_size=%u written=%u",
-                 (unsigned)(ret < 0 ? -ret : ret),
-                 (unsigned)input_len,
-                 (unsigned)out_size,
-                 (unsigned)written);
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    for (size_t i = 0; i < written; ++i) {
-        if (out[i] == '+') out[i] = '-';
-        else if (out[i] == '/') out[i] = '_';
-    }
-
-    while (written > 0 && out[written - 1] == '=') --written;
-    out[written] = '\0';
-    return ESP_OK;
-}
 
 static esp_err_t zigbee_ota_report_payload(const char *payload)
 {
@@ -79,12 +32,7 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
         false);
     if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
         esp_zb_lock_release();
-        ESP_LOGW(TAG,
-                 "manufacturer attr set failed cluster=0x%04x attr=0x%04x manuf=0x%04x zcl_status=0x%x",
-                 ZIGBEE_OTA_CLUSTER_ID,
-                 ZIGBEE_OTA_CONFIG_ATTR_ID,
-                 ZIGBEE_OTA_MANUFACTURER_CODE,
-                 status);
+        ESP_LOGW(TAG, "TEST HELLO attr set failed zcl_status=0x%x", status);
         return ESP_FAIL;
     }
 
@@ -106,119 +54,24 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
     esp_zb_lock_release();
 
     ESP_LOGI(TAG,
-             "manufacturer report cluster=0x%04x attr=0x%04x manuf=0x%04x bytes=%u ret=%s(0x%x) payload=%s",
+             "TEST HELLO report cluster=0x%04x attr=0x%04x manuf=0x%04x payload=%s ret=%s(0x%x)",
              ZIGBEE_OTA_CLUSTER_ID,
              ZIGBEE_OTA_CONFIG_ATTR_ID,
              ZIGBEE_OTA_MANUFACTURER_CODE,
-             (unsigned)payload_len,
+             payload,
              esp_err_to_name(err),
-             err,
-             payload);
+             err);
     return err;
-}
-
-static esp_err_t send_secure_hello(const char *device_id)
-{
-    ESP_RETURN_ON_ERROR(device_credentials_init(), TAG, "device credentials unavailable");
-
-    uint64_t counter = 0;
-    ESP_RETURN_ON_ERROR(device_identity_next_enrollment_counter(&counter), TAG, "HELLO counter update failed");
-
-    char canonical[96];
-    int canonical_len = snprintf(canonical, sizeof(canonical), "H|%s|%" PRIu64, device_id, counter);
-    if (canonical_len <= 0 || (size_t)canonical_len >= sizeof(canonical)) return ESP_ERR_INVALID_SIZE;
-
-    uint8_t signature_raw[DEVICE_CREDENTIAL_SIGNATURE_RAW_LEN];
-    ESP_RETURN_ON_ERROR(
-        device_credentials_sign_raw64((const uint8_t *)canonical, (size_t)canonical_len, signature_raw),
-        TAG,
-        "HELLO signing failed");
-
-    char signature_b64[HELLO_SIGNATURE_B64_MAX];
-    ESP_RETURN_ON_ERROR(
-        base64url_encode(signature_raw, sizeof(signature_raw), signature_b64, sizeof(signature_b64)),
-        TAG,
-        "HELLO signature encoding failed");
-
-    char payload[ZIGBEE_OTA_HELLO_FRAME_MAX + 1];
-    int payload_len = snprintf(payload, sizeof(payload), "H|%" PRIu64 "|%s", counter, signature_b64);
-    if (payload_len <= 0 || payload_len > ZIGBEE_OTA_HELLO_FRAME_MAX) return ESP_ERR_INVALID_SIZE;
-
-    ESP_LOGI(TAG,
-             "HELLO single-frame device_id=%s counter=%" PRIu64 " signed_bytes=%u signature_b64_len=%u frame_bytes=%u",
-             device_id,
-             counter,
-             (unsigned)canonical_len,
-             (unsigned)strlen(signature_b64),
-             (unsigned)payload_len);
-
-    esp_err_t err = zigbee_ota_report_payload(payload);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "HELLO single-frame send complete device_id=%s counter=%" PRIu64,
-                 device_id, counter);
-    }
-    return err;
-}
-
-static void zigbee_ota_hello_task(void *arg)
-{
-    (void)arg;
-    const uint32_t initial_delay_ms = s_hello_delay_ms;
-    ESP_LOGI(TAG, "HELLO task scheduled delay_ms=%lu", (unsigned long)initial_delay_ms);
-    if (initial_delay_ms > 0) {
-        vTaskDelay(pdMS_TO_TICKS(initial_delay_ms));
-    }
-
-    for (unsigned attempt = 1; attempt <= 30; ++attempt) {
-        if (!zigbee_ota_is_joined()) {
-            ESP_LOGW(TAG,
-                     "HELLO waiting for usable Zigbee network attempt=%u factory_new=%d short=0x%04x",
-                     attempt,
-                     esp_zb_bdb_is_factory_new(),
-                     esp_zb_get_short_address());
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-
-        char device_id[DEVICE_ID_MAX_LEN] = {0};
-        esp_err_t id_err = device_identity_get_device_id(device_id);
-        if (id_err != ESP_OK || device_id[0] == '\0' ||
-            strcmp(device_id, "00:00:00:00:00:00:00:00") == 0) {
-            ESP_LOGW(TAG, "HELLO waiting for device identity attempt=%u err=%s",
-                     attempt, esp_err_to_name(id_err));
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-
-        ESP_LOGI(TAG,
-                 "HELLO network ready attempt=%u channel=%u short=0x%04x",
-                 attempt,
-                 esp_zb_get_current_channel(),
-                 esp_zb_get_short_address());
-        esp_err_t err = send_secure_hello(device_id);
-        if (err == ESP_OK) break;
-        ESP_LOGW(TAG, "HELLO send failed attempt=%u: %s", attempt, esp_err_to_name(err));
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-    s_hello_task_started = false;
-    vTaskDelete(NULL);
 }
 
 void zigbee_ota_schedule_hello(uint32_t delay_ms)
 {
-    if (s_hello_task_started) {
-        ESP_LOGI(TAG, "HELLO schedule ignored: task already active");
-        return;
+    (void)delay_ms;
+    ESP_LOGI(TAG, "TEST HELLO sending minimal payload after confirmed join");
+    esp_err_t err = zigbee_ota_report_payload("H|TEST");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "TEST HELLO send failed: %s", esp_err_to_name(err));
     }
-
-    s_hello_delay_ms = delay_ms;
-    s_hello_task_started = true;
-    if (xTaskCreate(zigbee_ota_hello_task, "zb_ota_hello", 4096, NULL, 5, NULL) != pdPASS) {
-        s_hello_task_started = false;
-        ESP_LOGE(TAG, "HELLO task creation failed");
-        return;
-    }
-    ESP_LOGI(TAG, "HELLO scheduled delay_ms=%lu", (unsigned long)delay_ms);
 }
 
 esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
@@ -238,7 +91,7 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
         s_ota_payload_attr);
     if (err == ESP_OK) {
         ESP_LOGI(TAG,
-                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x; automatic HELLO disabled for Zigbee baseline test",
+                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x; TEST HELLO mode",
                  ZIGBEE_OTA_CLUSTER_ID,
                  ZIGBEE_OTA_CONFIG_ATTR_ID,
                  ZIGBEE_OTA_MANUFACTURER_CODE);
