@@ -21,8 +21,16 @@ extern "C" {
 #define ZIGBEE_OTA_CMD_COMMAND_ACK_ID             0x06
 #define ZIGBEE_OTA_ENDPOINT                      1
 
-#define ZIGBEE_OTA_ZCL_STRING_CAPACITY           254
-/* One HELLO application report: H|counter|base64url(raw P-256 r||s). */
+/*
+ * Empirical safe ceiling for esp_zb_zcl_report_attr_cmd_req() with this
+ * manufacturer-specific CHAR_STRING attribute on ESP32-C6 / ESP Zigbee SDK.
+ * 42+ byte reports trigger a ZBOSS assertion in zcl_general_commands.c.
+ * Keep this guard below the observed crash point; longer protocol messages
+ * must be fragmented before they reach the ZCL report API.
+ */
+#define ZIGBEE_OTA_ZCL_STRING_CAPACITY           40
+
+/* Logical HELLO size before fragmentation. */
 #define ZIGBEE_OTA_HELLO_FRAME_MAX               112
 
 esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster);
