@@ -14,6 +14,7 @@ const OTA_CLUSTER_NAME = 'jarzemOta';
 const OTA_ATTR_NAME = 'otaCommand';
 const OTA_CMD_TO_DEVICE = 'otaToDevice';
 const OTA_CMD_FROM_DEVICE = 'otaFromDevice';
+const OTA_CMD_FROM_DEVICE_ID = 0x11;
 
 const ENDPOINTS = {
     switch1: 1,
@@ -109,7 +110,6 @@ const remoteFromColorTemperature = {
     },
 };
 
-/* Legacy Report Attributes receive path retained while migration is tested. */
 const remoteFromOtaAttribute = {
     cluster: OTA_CLUSTER_NAME,
     type: ['attributeReport', 'readResponse'],
@@ -120,7 +120,6 @@ const remoteFromOtaAttribute = {
     },
 };
 
-/* New server->client custom command transport from ESP. */
 const remoteFromOtaCommand = {
     cluster: OTA_CLUSTER_NAME,
     type: ['commandOtaFromDevice'],
@@ -128,6 +127,33 @@ const remoteFromOtaCommand = {
         const value = msg.data?.payload;
         if (value === undefined || value === null) return;
         return {action: String(value)};
+    },
+};
+
+/*
+ * Herdsman currently exposes our manufacturer-specific custom command as raw.
+ * Observed wire layout:
+ *   [frameControl, transactionSequence, commandId, charStringLength, ...payload]
+ * Example: [9,26,17,60,68,124,...] = cmd 0x11, 60-byte "D|L060|...".
+ */
+const remoteFromOtaRaw = {
+    cluster: OTA_CLUSTER_NAME,
+    type: ['raw'],
+    convert: (model, msg) => {
+        const raw = msg.data?.data;
+        if (raw === undefined || raw === null) return;
+
+        const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+        if (bytes.length < 4) return;
+
+        const commandId = bytes[2];
+        if (commandId !== OTA_CMD_FROM_DEVICE_ID) return;
+
+        const declaredLength = bytes[3];
+        if (declaredLength < 1 || bytes.length < 4 + declaredLength) return;
+
+        const payload = bytes.subarray(4, 4 + declaredLength).toString('utf8');
+        return {action: payload};
     },
 };
 
@@ -160,7 +186,6 @@ const remoteToColorTemperature = {
     convertGet: async (entity, key, meta) => { await lightEndpoint(entity, meta).read('lightingColorCtrl', ['colorTemperature', 'colorMode']); },
 };
 
-/* Inbound remains legacy attribute-write for this first transport test. It is short for D|LEN|N/PING. */
 const remoteToOtaCommand = {
     key: ['ota_command'],
     convertSet: async (entity, key, value, meta) => {
@@ -203,7 +228,7 @@ const definition = {
             },
         }),
     ],
-    fromZigbee: [remoteFromOnOff, remoteFromBrightness, remoteFromColorTemperature, remoteFromOtaAttribute, remoteFromOtaCommand],
+    fromZigbee: [remoteFromOnOff, remoteFromBrightness, remoteFromColorTemperature, remoteFromOtaAttribute, remoteFromOtaCommand, remoteFromOtaRaw],
     toZigbee: [remoteToOnOff, remoteToBrightness, remoteToColorTemperature, remoteToOtaCommand],
     exposes: [
         e.light().withBrightness().withColorTemp([COLOR_TEMP_MIN_MIRED, COLOR_TEMP_MAX_MIRED]).withEndpoint('light'),
