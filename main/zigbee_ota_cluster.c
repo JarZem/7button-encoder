@@ -69,13 +69,22 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
     memcpy(&s_ota_payload_attr[1], payload, payload_len);
 
     esp_zb_lock_acquire(portMAX_DELAY);
-    esp_zb_zcl_status_t status = esp_zb_zcl_set_attribute_val(
-        ZIGBEE_OTA_ENDPOINT, ZIGBEE_OTA_CLUSTER_ID, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        ZIGBEE_OTA_CONFIG_ATTR_ID, s_ota_payload_attr, false);
+    esp_zb_zcl_status_t status = esp_zb_zcl_set_manufacturer_attribute_val(
+        ZIGBEE_OTA_ENDPOINT,
+        ZIGBEE_OTA_CLUSTER_ID,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ZIGBEE_OTA_MANUFACTURER_CODE,
+        ZIGBEE_OTA_CONFIG_ATTR_ID,
+        s_ota_payload_attr,
+        false);
     if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
         esp_zb_lock_release();
-        ESP_LOGW(TAG, "custom attr set failed cluster=0x%04x attr=0x%04x zcl_status=0x%x",
-                 ZIGBEE_OTA_CLUSTER_ID, ZIGBEE_OTA_CONFIG_ATTR_ID, status);
+        ESP_LOGW(TAG,
+                 "manufacturer attr set failed cluster=0x%04x attr=0x%04x manuf=0x%04x zcl_status=0x%x",
+                 ZIGBEE_OTA_CLUSTER_ID,
+                 ZIGBEE_OTA_CONFIG_ATTR_ID,
+                 ZIGBEE_OTA_MANUFACTURER_CODE,
+                 status);
         return ESP_FAIL;
     }
 
@@ -87,6 +96,8 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
         },
         .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
         .clusterID = ZIGBEE_OTA_CLUSTER_ID,
+        .manuf_specific = 1,
+        .manuf_code = ZIGBEE_OTA_MANUFACTURER_CODE,
         .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI,
         .dis_default_resp = 1,
         .attributeID = ZIGBEE_OTA_CONFIG_ATTR_ID,
@@ -95,9 +106,10 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
     esp_zb_lock_release();
 
     ESP_LOGI(TAG,
-             "custom report cluster=0x%04x attr=0x%04x bytes=%u ret=%s(0x%x) payload=%s",
+             "manufacturer report cluster=0x%04x attr=0x%04x manuf=0x%04x bytes=%u ret=%s(0x%x) payload=%s",
              ZIGBEE_OTA_CLUSTER_ID,
              ZIGBEE_OTA_CONFIG_ATTR_ID,
+             ZIGBEE_OTA_MANUFACTURER_CODE,
              (unsigned)payload_len,
              esp_err_to_name(err),
              err,
@@ -212,11 +224,24 @@ void zigbee_ota_schedule_hello(uint32_t delay_ms)
 esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
 {
     s_ota_payload_attr[0] = 0;
-    esp_err_t err = esp_zb_custom_cluster_add_custom_attr(
-        cluster, ZIGBEE_OTA_CONFIG_ATTR_ID, ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
-        ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+    const uint8_t access = ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE |
+                           ESP_ZB_ZCL_ATTR_ACCESS_REPORTING |
+                           ESP_ZB_ZCL_ATTR_MANUF_SPEC;
+
+    esp_err_t err = esp_zb_cluster_add_manufacturer_attr(
+        cluster,
+        ZIGBEE_OTA_CLUSTER_ID,
+        ZIGBEE_OTA_CONFIG_ATTR_ID,
+        ZIGBEE_OTA_MANUFACTURER_CODE,
+        ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
+        access,
         s_ota_payload_attr);
     if (err == ESP_OK) {
+        ESP_LOGI(TAG,
+                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x",
+                 ZIGBEE_OTA_CLUSTER_ID,
+                 ZIGBEE_OTA_CONFIG_ATTR_ID,
+                 ZIGBEE_OTA_MANUFACTURER_CODE);
         zigbee_ota_schedule_hello(HELLO_STARTUP_QUIET_MS);
     }
     return err;
