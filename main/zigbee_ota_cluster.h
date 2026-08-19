@@ -21,11 +21,9 @@ extern "C" {
 #define ZIGBEE_OTA_CMD_COMMAND_ACK_ID             0x06
 #define ZIGBEE_OTA_ENDPOINT                      1
 
-/* Attribute storage capacity. Enrollment HELLO frames deliberately use a much
- * smaller limit so every application fragment stays well below one 127-byte
- * IEEE 802.15.4 PSDU after Zigbee/ZCL overhead. */
 #define ZIGBEE_OTA_ZCL_STRING_CAPACITY           254
-#define ZIGBEE_OTA_HELLO_FRAME_MAX               62
+/* One HELLO application report: H|counter|base64url(raw P-256 r||s). */
+#define ZIGBEE_OTA_HELLO_FRAME_MAX               112
 
 esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster);
 void zigbee_ota_schedule_hello(uint32_t delay_ms);
