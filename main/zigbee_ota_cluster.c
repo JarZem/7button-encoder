@@ -59,11 +59,6 @@ static esp_err_t base64url_encode(const uint8_t *input, size_t input_len, char *
     return ESP_OK;
 }
 
-/*
- * OTA transport is now a custom ZCL command, not Report Attributes.
- * data.type=SET makes the SDK pass the command payload bytes through unchanged.
- * We encode one ZCL CHAR_STRING parameter manually: [length][ASCII payload].
- */
 static esp_err_t zigbee_ota_send_command_payload(const char *payload)
 {
     if (payload == NULL) return ESP_ERR_INVALID_ARG;
@@ -96,11 +91,43 @@ static esp_err_t zigbee_ota_send_command_payload(const char *payload)
 
     ESP_LOGI(TAG,
              "OTA custom command tx cluster=0x%04x cmd=0x%02x bytes=%u ret=%s(0x%x) payload=%s",
-             ZIGBEE_OTA_CLUSTER_ID,
-             ZIGBEE_OTA_CMD_FROM_DEVICE_ID,
-             (unsigned)payload_len,
-             esp_err_to_name(err), err, payload);
+             ZIGBEE_OTA_CLUSTER_ID, ZIGBEE_OTA_CMD_FROM_DEVICE_ID,
+             (unsigned)payload_len, esp_err_to_name(err), err, payload);
     return err;
+}
+
+static void zigbee_ota_diag_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(100));
+    esp_err_t err = zigbee_ota_send_command_payload(DIAG_PONG);
+    ESP_LOGI(TAG, "DIAG PING result custom_cmd=%s", esp_err_to_name(err));
+    s_diag_task_started = false;
+    vTaskDelete(NULL);
+}
+
+static void zigbee_ota_len_test_task(void *arg)
+{
+    (void)arg;
+    unsigned iteration = 0;
+    while (s_len_test_payload_len != 0) {
+        const size_t len = s_len_test_payload_len;
+        char test[DIAG_LEN_MAX + 1];
+        int prefix = snprintf(test, sizeof(test), "D|L%03u|", (unsigned)len);
+        size_t used = prefix > 0 ? (size_t)prefix : 0;
+        if (used > len) used = len;
+        for (size_t i = used; i < len; ++i) test[i] = (char)('A' + (i % 26));
+        test[len] = '\0';
+        ++iteration;
+        ESP_LOGI(TAG, "DIAG LEN iteration=%u bytes=%u transport=custom_cmd", iteration, (unsigned)len);
+        esp_err_t err = zigbee_ota_send_command_payload(test);
+        ESP_LOGI(TAG, "DIAG LEN result iteration=%u bytes=%u custom_cmd=%s",
+                 iteration, (unsigned)len, esp_err_to_name(err));
+        for (unsigned elapsed = 0; elapsed < DIAG_REPEAT_MS && s_len_test_payload_len != 0; elapsed += 100)
+            vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    s_len_test_task_started = false;
+    vTaskDelete(NULL);
 }
 
 static bool zigbee_ota_process_payload(const char *payload, size_t payload_len)
@@ -110,16 +137,8 @@ static bool zigbee_ota_process_payload(const char *payload, size_t payload_len)
     if (strcmp(payload, DIAG_PING) == 0) {
         if (!s_diag_task_started) {
             s_diag_task_started = true;
-            if (xTaskCreate([](void *arg) {
-                    (void)arg;
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                    esp_err_t err = zigbee_ota_send_command_payload(DIAG_PONG);
-                    ESP_LOGI(TAG, "DIAG PING result custom_cmd=%s", esp_err_to_name(err));
-                    s_diag_task_started = false;
-                    vTaskDelete(NULL);
-                }, "zb_ota_diag", 3072, NULL, 5, NULL) != pdPASS) {
+            if (xTaskCreate(zigbee_ota_diag_task, "zb_ota_diag", 3072, NULL, 5, NULL) != pdPASS)
                 s_diag_task_started = false;
-            }
         }
         return true;
     }
@@ -139,27 +158,7 @@ static bool zigbee_ota_process_payload(const char *payload, size_t payload_len)
         s_len_test_payload_len = (size_t)requested;
         if (!s_len_test_task_started) {
             s_len_test_task_started = true;
-            if (xTaskCreate([](void *arg) {
-                    (void)arg;
-                    unsigned iteration = 0;
-                    while (s_len_test_payload_len != 0) {
-                        const size_t len = s_len_test_payload_len;
-                        char test[DIAG_LEN_MAX + 1];
-                        int prefix = snprintf(test, sizeof(test), "D|L%03u|", (unsigned)len);
-                        size_t used = prefix > 0 ? (size_t)prefix : 0;
-                        if (used > len) used = len;
-                        for (size_t i = used; i < len; ++i) test[i] = (char)('A' + (i % 26));
-                        test[len] = '\0';
-                        ++iteration;
-                        ESP_LOGI(TAG, "DIAG LEN iteration=%u bytes=%u transport=custom_cmd", iteration, (unsigned)len);
-                        esp_err_t err = zigbee_ota_send_command_payload(test);
-                        ESP_LOGI(TAG, "DIAG LEN result iteration=%u bytes=%u custom_cmd=%s", iteration, (unsigned)len, esp_err_to_name(err));
-                        for (unsigned elapsed = 0; elapsed < DIAG_REPEAT_MS && s_len_test_payload_len != 0; elapsed += 100)
-                            vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                    s_len_test_task_started = false;
-                    vTaskDelete(NULL);
-                }, "zb_ota_len", 3072, NULL, 5, NULL) != pdPASS) {
+            if (xTaskCreate(zigbee_ota_len_test_task, "zb_ota_len", 3072, NULL, 5, NULL) != pdPASS) {
                 s_len_test_task_started = false;
                 s_len_test_payload_len = 0;
             }
@@ -168,9 +167,8 @@ static bool zigbee_ota_process_payload(const char *payload, size_t payload_len)
         return true;
     }
 
-    if (!ota_service_request_payload(payload, payload_len)) {
+    if (!ota_service_request_payload(payload, payload_len))
         ESP_LOGW(TAG, "OTA ERROR: request ignored: busy or queue full");
-    }
     return true;
 }
 
@@ -234,13 +232,11 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
         cluster, ZIGBEE_OTA_CLUSTER_ID, ZIGBEE_OTA_CONFIG_ATTR_ID,
         ZIGBEE_OTA_MANUFACTURER_CODE, ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
         access, s_ota_payload_attr);
-    if (err == ESP_OK) {
+    if (err == ESP_OK)
         ESP_LOGW(TAG, "OTA cluster registered; transport=custom ZCL command; legacy attr retained");
-    }
     return err;
 }
 
-/* Legacy attribute-write receive path retained during migration. */
 bool zigbee_ota_cluster_handle_set_attr(const esp_zb_zcl_set_attr_value_message_t *message)
 {
     if (message == NULL || message->info.status != ESP_ZB_ZCL_STATUS_SUCCESS ||
