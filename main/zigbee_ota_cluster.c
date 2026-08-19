@@ -22,7 +22,6 @@ static const char *TAG = "zigbee_ota_cluster";
 #define HELLO_WAIT_ATTEMPTS 30
 #define HELLO_SIGNATURE_B64_MAX 96
 #define HELLO_START_DELAY_MS 5000
-#define HELLO_REPEAT_MS 20000
 #define DIAG_PING "D|PING"
 #define DIAG_PONG "D|PONG"
 #define DIAG_LEN_PREFIX "D|LEN|"
@@ -33,6 +32,7 @@ static const char *TAG = "zigbee_ota_cluster";
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
+static bool s_hello_sent_this_boot;
 static volatile bool s_auth_challenge_received;
 static bool s_diag_task_started;
 static bool s_len_test_task_started;
@@ -171,7 +171,7 @@ static bool zigbee_ota_process_payload(const char *payload, size_t payload_len)
 
     if (payload_len >= 3 && payload[0] == 'A' && payload[1] == '|') {
         s_auth_challenge_received = true;
-        ESP_LOGI(TAG, "DEVICE_AUTH_CHALLENGE accepted; periodic HELLO stopped payload=%s", payload);
+        ESP_LOGI(TAG, "DEVICE_AUTH_CHALLENGE received payload=%s", payload);
         return true;
     }
 
@@ -210,33 +210,29 @@ static void zigbee_ota_hello_task(void *arg)
     (void)arg;
     if (s_hello_delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(s_hello_delay_ms));
 
-    while (!s_auth_challenge_received) {
+    for (unsigned attempt = 1; attempt <= HELLO_WAIT_ATTEMPTS; ++attempt) {
         if (!zigbee_ota_network_identity_valid()) {
-            ESP_LOGI(TAG, "HELLO waiting for joined Zigbee network");
+            ESP_LOGI(TAG, "HELLO waiting for joined Zigbee network attempt=%u/%u", attempt, HELLO_WAIT_ATTEMPTS);
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
 
         esp_err_t err = send_secure_hello();
-        ESP_LOGI(TAG, "HELLO result=%s; next_retry_ms=%u", esp_err_to_name(err), HELLO_REPEAT_MS);
-
-        for (unsigned elapsed = 0; elapsed < HELLO_REPEAT_MS && !s_auth_challenge_received; elapsed += 100) {
-            vTaskDelay(pdMS_TO_TICKS(100));
-        }
+        ESP_LOGI(TAG, "HELLO one-shot result=%s attempt=%u", esp_err_to_name(err), attempt);
+        if (err == ESP_OK) s_hello_sent_this_boot = true;
+        break;
     }
 
-    ESP_LOGI(TAG, "HELLO loop finished: authentication challenge received");
     s_hello_task_started = false;
     vTaskDelete(NULL);
 }
 
 void zigbee_ota_schedule_hello(uint32_t delay_ms)
 {
-    if (s_auth_challenge_received || s_hello_task_started) return;
+    if (s_hello_sent_this_boot || s_auth_challenge_received || s_hello_task_started) return;
     s_hello_delay_ms = delay_ms;
     s_hello_task_started = true;
-    ESP_LOGI(TAG, "HELLO scheduled delay_ms=%lu repeat_ms=%u transport=custom_cmd",
-             (unsigned long)delay_ms, HELLO_REPEAT_MS);
+    ESP_LOGI(TAG, "HELLO scheduled delay_ms=%lu mode=one-shot transport=custom_cmd", (unsigned long)delay_ms);
     if (xTaskCreate(zigbee_ota_hello_task, "zb_ota_hello", 4096, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "HELLO task create failed");
         s_hello_task_started = false;
