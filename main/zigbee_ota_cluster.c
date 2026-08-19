@@ -18,6 +18,8 @@
 
 static const char *TAG = "zigbee_ota_cluster";
 
+#define HELLO_STARTUP_DELAY_MS 4500
+#define HELLO_WAIT_ATTEMPTS 30
 #define HELLO_SIGNATURE_B64_MAX 96
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
@@ -173,12 +175,18 @@ static void zigbee_ota_hello_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
 
-    if (!zigbee_ota_network_identity_valid()) {
-        ESP_LOGW(TAG,
-                 "HELLO not sent: network identity invalid factory_new=%d short=0x%04x",
-                 esp_zb_bdb_is_factory_new(),
-                 esp_zb_get_short_address());
-    } else {
+    for (unsigned attempt = 1; attempt <= HELLO_WAIT_ATTEMPTS; ++attempt) {
+        if (!zigbee_ota_network_identity_valid()) {
+            ESP_LOGI(TAG,
+                     "HELLO waiting for usable network attempt=%u/%u factory_new=%d short=0x%04x",
+                     attempt,
+                     HELLO_WAIT_ATTEMPTS,
+                     esp_zb_bdb_is_factory_new(),
+                     esp_zb_get_short_address());
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
         ESP_LOGI(TAG,
                  "HELLO network ready channel=%u short=0x%04x",
                  esp_zb_get_current_channel(),
@@ -189,6 +197,11 @@ static void zigbee_ota_hello_task(void *arg)
         } else {
             ESP_LOGW(TAG, "HELLO send failed: %s", esp_err_to_name(err));
         }
+        break;
+    }
+
+    if (!s_hello_sent_this_boot) {
+        ESP_LOGW(TAG, "HELLO not submitted during startup window");
     }
 
     s_hello_task_started = false;
@@ -213,7 +226,7 @@ void zigbee_ota_schedule_hello(uint32_t delay_ms)
         ESP_LOGE(TAG, "HELLO task creation failed");
         return;
     }
-    ESP_LOGI(TAG, "HELLO scheduled after confirmed network state delay_ms=%lu", (unsigned long)delay_ms);
+    ESP_LOGI(TAG, "HELLO scheduled delay_ms=%lu", (unsigned long)delay_ms);
 }
 
 esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
@@ -233,10 +246,11 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
         s_ota_payload_attr);
     if (err == ESP_OK) {
         ESP_LOGI(TAG,
-                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x; HELLO waits for network confirmation",
+                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x; signed HELLO scheduled",
                  ZIGBEE_OTA_CLUSTER_ID,
                  ZIGBEE_OTA_CONFIG_ATTR_ID,
                  ZIGBEE_OTA_MANUFACTURER_CODE);
+        zigbee_ota_schedule_hello(HELLO_STARTUP_DELAY_MS);
     }
     return err;
 }
