@@ -6,13 +6,13 @@ const OTA_CLUSTER_ID = 0xfc00;
 const OTA_CONFIG_ATTR_ID = 0x0001;
 const OTA_MANUFACTURER_CODE = 0x1234;
 const OTA_COMMAND_MAX_LEN = 254;
-const OTA_ATTR_FRAME_CHUNK = 28;
 const OTA_CODE_RE = /^[0-9A-Za-z]{3}$/;
 const OTA_TOKEN_RE = /^[0-9A-Za-z_-]{16}$/;
 const OTA_AUTH_CHALLENGE_RE = /^A\|[0-9a-fA-F]{16}\|[0-9a-fA-F]{64}$/;
 const OTA_DIAG_LEN_RE = /^D\|LEN\|(100|[1-9][0-9]?)$/;
 const OTA_CLUSTER_NAME = 'jarzemOta';
 const OTA_ATTR_NAME = 'otaCommand';
+const OTA_CMD_TO_DEVICE = 'otaToDevice';
 const OTA_CMD_FROM_DEVICE = 'otaFromDevice';
 const OTA_CMD_FROM_DEVICE_ID = 0x11;
 
@@ -130,17 +130,30 @@ const remoteFromOtaCommand = {
     },
 };
 
+/*
+ * Herdsman currently exposes our manufacturer-specific custom command as raw.
+ * Observed wire layout:
+ *   [frameControl, transactionSequence, commandId, charStringLength, ...payload]
+ * Example: [9,26,17,60,68,124,...] = cmd 0x11, 60-byte "D|L060|...".
+ */
 const remoteFromOtaRaw = {
     cluster: OTA_CLUSTER_NAME,
     type: ['raw'],
     convert: (model, msg) => {
         const raw = msg.data?.data;
         if (raw === undefined || raw === null) return;
+
         const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-        if (bytes.length < 4 || bytes[2] !== OTA_CMD_FROM_DEVICE_ID) return;
+        if (bytes.length < 4) return;
+
+        const commandId = bytes[2];
+        if (commandId !== OTA_CMD_FROM_DEVICE_ID) return;
+
         const declaredLength = bytes[3];
         if (declaredLength < 1 || bytes.length < 4 + declaredLength) return;
-        return {action: bytes.subarray(4, 4 + declaredLength).toString('utf8')};
+
+        const payload = bytes.subarray(4, 4 + declaredLength).toString('utf8');
+        return {action: payload};
     },
 };
 
@@ -178,17 +191,7 @@ const remoteToOtaCommand = {
     convertSet: async (entity, key, value, meta) => {
         validateOtaCommand(value);
         const endpoint = meta.device.getEndpoint(ENDPOINTS.switch1) ?? entity;
-        const total = Math.ceil(value.length / OTA_ATTR_FRAME_CHUNK);
-        for (let i = 0; i < total; i++) {
-            const seq = i + 1;
-            const part = value.slice(i * OTA_ATTR_FRAME_CHUNK, (i + 1) * OTA_ATTR_FRAME_CHUNK);
-            const frame = `X|${String(seq).padStart(2, '0')}|${String(total).padStart(2, '0')}|${part}`;
-            await endpoint.write(
-                OTA_CLUSTER_NAME,
-                {[OTA_ATTR_NAME]: frame},
-                {manufacturerCode: OTA_MANUFACTURER_CODE, disableDefaultResponse: false},
-            );
-        }
+        await endpoint.write(OTA_CLUSTER_NAME, {[OTA_ATTR_NAME]: value}, {disableDefaultResponse: false, manufacturerCode: OTA_MANUFACTURER_CODE});
         return {state: {}};
     },
 };
@@ -208,6 +211,13 @@ const definition = {
             manufacturerCode: OTA_MANUFACTURER_CODE,
             attributes: {
                 [OTA_ATTR_NAME]: {name: OTA_ATTR_NAME, ID: OTA_CONFIG_ATTR_ID, type: Zcl.DataType.CHAR_STR, write: true},
+            },
+            commands: {
+                [OTA_CMD_TO_DEVICE]: {
+                    name: OTA_CMD_TO_DEVICE,
+                    ID: 0x10,
+                    parameters: [{name: 'payload', type: Zcl.DataType.CHAR_STR}],
+                },
             },
             commandsResponse: {
                 [OTA_CMD_FROM_DEVICE]: {
