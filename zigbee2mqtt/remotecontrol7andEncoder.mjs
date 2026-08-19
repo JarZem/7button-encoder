@@ -130,11 +130,6 @@ const remoteFromOtaCommand = {
     },
 };
 
-/*
- * Herdsman currently exposes our manufacturer-specific custom command as raw.
- * Observed wire layout:
- *   [frameControl, transactionSequence, commandId, charStringLength, ...payload]
- */
 const remoteFromOtaRaw = {
     cluster: OTA_CLUSTER_NAME,
     type: ['raw'],
@@ -187,7 +182,7 @@ const remoteToOtaCommand = {
             OTA_CLUSTER_NAME,
             OTA_CMD_TO_DEVICE,
             {payload: value},
-            {disableDefaultResponse: true, manufacturerCode: OTA_MANUFACTURER_CODE},
+            {disableResponse: true, disableDefaultResponse: true},
         );
         return {state: {}};
     },
