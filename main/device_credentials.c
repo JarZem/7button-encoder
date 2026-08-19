@@ -6,6 +6,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "mbedtls/ecdsa.h"
 #include "mbedtls/ecp.h"
 #include "mbedtls/pk.h"
 #include "mbedtls/private_access.h"
@@ -121,10 +122,54 @@ esp_err_t device_credentials_sign(const uint8_t *data, size_t data_len,
     int ret = mbedtls_pk_sign(&s_private_key, MBEDTLS_MD_SHA256, hash, sizeof(hash),
                               signature_der, signature_size, &out_len, esp_rng, NULL);
     if (ret != 0) {
-        ESP_LOGE(TAG, "HELLO signature failed: -0x%04x", (unsigned)-ret);
+        ESP_LOGE(TAG, "signature failed: -0x%04x", (unsigned)-ret);
         return ESP_FAIL;
     }
     *signature_len = out_len;
+    return ESP_OK;
+}
+
+esp_err_t device_credentials_sign_raw64(const uint8_t *data, size_t data_len,
+                                        uint8_t signature[DEVICE_CREDENTIAL_SIGNATURE_RAW_LEN])
+{
+    ESP_RETURN_ON_FALSE(data != NULL && data_len > 0 && signature != NULL,
+                        ESP_ERR_INVALID_ARG, TAG, "invalid raw sign arguments");
+    ESP_RETURN_ON_ERROR(device_credentials_init(), TAG, "credentials unavailable");
+
+    mbedtls_ecp_keypair *ec = mbedtls_pk_ec(s_private_key);
+    ESP_RETURN_ON_FALSE(ec != NULL, ESP_ERR_NOT_SUPPORTED, TAG, "private key is not EC");
+
+    uint8_t hash[32];
+    if (mbedtls_sha256(data, data_len, hash, 0) != 0) return ESP_FAIL;
+
+    mbedtls_mpi r;
+    mbedtls_mpi s;
+    mbedtls_mpi_init(&r);
+    mbedtls_mpi_init(&s);
+
+    int ret = mbedtls_ecdsa_sign(&ec->MBEDTLS_PRIVATE(grp),
+                                 &r,
+                                 &s,
+                                 &ec->MBEDTLS_PRIVATE(d),
+                                 hash,
+                                 sizeof(hash),
+                                 esp_rng,
+                                 NULL);
+    if (ret == 0) {
+        ret = mbedtls_mpi_write_binary(&r, signature, 32);
+    }
+    if (ret == 0) {
+        ret = mbedtls_mpi_write_binary(&s, signature + 32, 32);
+    }
+
+    mbedtls_mpi_free(&r);
+    mbedtls_mpi_free(&s);
+
+    if (ret != 0) {
+        ESP_LOGE(TAG, "raw ECDSA signature failed: -0x%04x", (unsigned)-ret);
+        memset(signature, 0, DEVICE_CREDENTIAL_SIGNATURE_RAW_LEN);
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 
