@@ -314,11 +314,12 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
         access,
         s_ota_payload_attr);
     if (err == ESP_OK) {
-        ESP_LOGW(TAG,
-                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x; automatic HELLO disabled for Zigbee stabilization",
+        ESP_LOGI(TAG,
+                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x; signed HELLO scheduled",
                  ZIGBEE_OTA_CLUSTER_ID,
                  ZIGBEE_OTA_CONFIG_ATTR_ID,
                  ZIGBEE_OTA_MANUFACTURER_CODE);
+        zigbee_ota_schedule_hello(HELLO_STARTUP_DELAY_MS);
     }
     return err;
 }
