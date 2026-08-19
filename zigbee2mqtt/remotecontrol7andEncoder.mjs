@@ -66,6 +66,10 @@ const validateOtaCommand = (value) => {
         throw new Error(`OTA command length must be 1-${OTA_COMMAND_MAX_LEN} characters`);
     }
 
+    if (value === 'D|PING') {
+        return;
+    }
+
     if (value.startsWith('A|')) {
         if (!OTA_AUTH_CHALLENGE_RE.test(value)) {
             throw new Error('OTA auth challenge must be A|<16 hex message_id>|<64 hex challenge>');
@@ -84,7 +88,7 @@ const validateOtaCommand = (value) => {
     const provisioning = value.startsWith('P|') ? value.slice(2) : value;
     const fields = provisioning.split('|');
     if (fields.length !== 5) {
-        throw new Error('OTA command must be provisioning, C|TOKEN, or A|MESSAGE_ID|CHALLENGE');
+        throw new Error('OTA command must be D|PING, provisioning, C|TOKEN, or A|MESSAGE_ID|CHALLENGE');
     }
     if (!OTA_CODE_RE.test(fields[3])) {
         throw new Error('OTA firmware code must be exactly 3 alphanumeric characters');
