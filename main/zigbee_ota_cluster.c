@@ -8,11 +8,14 @@
 #include "freertos/task.h"
 #include "ota_config.h"
 #include "ota_service.h"
+#include "zcl/esp_zigbee_zcl_command.h"
 #include "zcl/esp_zigbee_zcl_common.h"
 
 static const char *TAG = "zigbee_ota_cluster";
 
 #define TEST_HELLO_DELAY_MS 5000
+#define TEST_HELLO_COMMAND_ID 0x01
+#define ZIGBEE_OTA_PROFILE_ID 0x0104
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_test_hello_started;
@@ -24,56 +27,35 @@ static bool zigbee_ota_network_identity_valid(void)
     return short_addr != 0x0000 && short_addr != 0xfffe && short_addr != 0xffff;
 }
 
-static esp_err_t zigbee_ota_report_payload(const char *payload)
+static void zigbee_ota_send_test_custom_command(const char *payload)
 {
-    if (payload == NULL) return ESP_ERR_INVALID_ARG;
-    const size_t payload_len = strlen(payload);
-    if (payload_len == 0 || payload_len > ZIGBEE_OTA_ZCL_STRING_CAPACITY) return ESP_ERR_INVALID_SIZE;
+    if (payload == NULL || payload[0] == '\0') return;
 
-    s_ota_payload_attr[0] = (uint8_t)payload_len;
-    memcpy(&s_ota_payload_attr[1], payload, payload_len);
+    const size_t payload_len = strlen(payload);
+    esp_zb_zcl_custom_cluster_cmd_req_t cmd_req = {0};
+    cmd_req.zcl_basic_cmd.dst_addr_u.addr_short = 0x0000;
+    cmd_req.zcl_basic_cmd.dst_endpoint = 1;
+    cmd_req.zcl_basic_cmd.src_endpoint = ZIGBEE_OTA_ENDPOINT;
+    cmd_req.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+    cmd_req.cluster_id = ZIGBEE_OTA_CLUSTER_ID;
+    cmd_req.profile_id = ZIGBEE_OTA_PROFILE_ID;
+    cmd_req.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
+    cmd_req.custom_cmd_id = TEST_HELLO_COMMAND_ID;
+    cmd_req.data.type = ESP_ZB_ZCL_ATTR_TYPE_SET;
+    cmd_req.data.size = payload_len;
+    cmd_req.data.value = (void *)payload;
 
     esp_zb_lock_acquire(portMAX_DELAY);
-    esp_zb_zcl_status_t status = esp_zb_zcl_set_manufacturer_attribute_val(
-        ZIGBEE_OTA_ENDPOINT,
-        ZIGBEE_OTA_CLUSTER_ID,
-        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        ZIGBEE_OTA_MANUFACTURER_CODE,
-        ZIGBEE_OTA_CONFIG_ATTR_ID,
-        s_ota_payload_attr,
-        false);
-    if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-        esp_zb_lock_release();
-        ESP_LOGW(TAG, "TEST HELLO attr set failed zcl_status=0x%x", status);
-        return ESP_FAIL;
-    }
-
-    esp_zb_zcl_report_attr_cmd_t cmd = {
-        .zcl_basic_cmd = {
-            .dst_addr_u.addr_short = 0x0000,
-            .dst_endpoint = 1,
-            .src_endpoint = ZIGBEE_OTA_ENDPOINT,
-        },
-        .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-        .clusterID = ZIGBEE_OTA_CLUSTER_ID,
-        .manuf_specific = 1,
-        .manuf_code = ZIGBEE_OTA_MANUFACTURER_CODE,
-        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI,
-        .dis_default_resp = 1,
-        .attributeID = ZIGBEE_OTA_CONFIG_ATTR_ID,
-    };
-    esp_err_t err = esp_zb_zcl_report_attr_cmd_req(&cmd);
+    esp_zb_zcl_custom_cluster_cmd_req(&cmd_req);
     esp_zb_lock_release();
 
     ESP_LOGI(TAG,
-             "TEST HELLO report cluster=0x%04x attr=0x%04x manuf=0x%04x payload=%s ret=%s(0x%x)",
+             "TEST HELLO custom command submitted dst=0x0000/1 src_ep=%u cluster=0x%04x cmd=0x%02x bytes=%u payload=%s",
+             ZIGBEE_OTA_ENDPOINT,
              ZIGBEE_OTA_CLUSTER_ID,
-             ZIGBEE_OTA_CONFIG_ATTR_ID,
-             ZIGBEE_OTA_MANUFACTURER_CODE,
-             payload,
-             esp_err_to_name(err),
-             err);
-    return err;
+             TEST_HELLO_COMMAND_ID,
+             (unsigned)payload_len,
+             payload);
 }
 
 static void test_hello_task(void *arg)
@@ -88,13 +70,10 @@ static void test_hello_task(void *arg)
                  esp_zb_get_short_address());
     } else {
         ESP_LOGI(TAG,
-                 "TEST HELLO network identity valid channel=%u short=0x%04x; sending H|TEST",
+                 "TEST HELLO network identity valid channel=%u short=0x%04x; sending custom command H|TEST",
                  esp_zb_get_current_channel(),
                  esp_zb_get_short_address());
-        esp_err_t err = zigbee_ota_report_payload("H|TEST");
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "TEST HELLO send failed: %s", esp_err_to_name(err));
-        }
+        zigbee_ota_send_test_custom_command("H|TEST");
     }
 
     s_test_hello_started = false;
@@ -129,7 +108,7 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
         s_ota_payload_attr);
     if (err == ESP_OK) {
         ESP_LOGI(TAG,
-                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x; scheduling H|TEST in %u ms",
+                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x; custom-command H|TEST scheduled in %u ms",
                  ZIGBEE_OTA_CLUSTER_ID,
                  ZIGBEE_OTA_CONFIG_ATTR_ID,
                  ZIGBEE_OTA_MANUFACTURER_CODE,
