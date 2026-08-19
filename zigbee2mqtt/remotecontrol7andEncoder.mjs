@@ -134,7 +134,6 @@ const remoteFromOtaCommand = {
  * Herdsman currently exposes our manufacturer-specific custom command as raw.
  * Observed wire layout:
  *   [frameControl, transactionSequence, commandId, charStringLength, ...payload]
- * Example: [9,26,17,60,68,124,...] = cmd 0x11, 60-byte "D|L060|...".
  */
 const remoteFromOtaRaw = {
     cluster: OTA_CLUSTER_NAME,
@@ -142,18 +141,11 @@ const remoteFromOtaRaw = {
     convert: (model, msg) => {
         const raw = msg.data?.data;
         if (raw === undefined || raw === null) return;
-
         const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-        if (bytes.length < 4) return;
-
-        const commandId = bytes[2];
-        if (commandId !== OTA_CMD_FROM_DEVICE_ID) return;
-
+        if (bytes.length < 4 || bytes[2] !== OTA_CMD_FROM_DEVICE_ID) return;
         const declaredLength = bytes[3];
         if (declaredLength < 1 || bytes.length < 4 + declaredLength) return;
-
-        const payload = bytes.subarray(4, 4 + declaredLength).toString('utf8');
-        return {action: payload};
+        return {action: bytes.subarray(4, 4 + declaredLength).toString('utf8')};
     },
 };
 
@@ -191,7 +183,12 @@ const remoteToOtaCommand = {
     convertSet: async (entity, key, value, meta) => {
         validateOtaCommand(value);
         const endpoint = meta.device.getEndpoint(ENDPOINTS.switch1) ?? entity;
-        await endpoint.write(OTA_CLUSTER_NAME, {[OTA_ATTR_NAME]: value}, {disableDefaultResponse: false, manufacturerCode: OTA_MANUFACTURER_CODE});
+        await endpoint.command(
+            OTA_CLUSTER_NAME,
+            OTA_CMD_TO_DEVICE,
+            {payload: value},
+            {disableDefaultResponse: false, manufacturerCode: OTA_MANUFACTURER_CODE},
+        );
         return {state: {}};
     },
 };
