@@ -21,10 +21,13 @@ static const char *TAG = "zigbee_ota_cluster";
 #define HELLO_STARTUP_DELAY_MS 4500
 #define HELLO_WAIT_ATTEMPTS 30
 #define HELLO_SIGNATURE_B64_MAX 96
+#define DIAG_PING "D|PING"
+#define DIAG_PONG "D|PONG"
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
 static bool s_hello_sent_this_boot;
+static bool s_diag_task_started;
 static uint32_t s_hello_delay_ms;
 
 static bool zigbee_ota_network_identity_valid(void)
@@ -82,7 +85,7 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
     if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
         esp_zb_lock_release();
         ESP_LOGW(TAG,
-                 "HELLO attr set failed cluster=0x%04x attr=0x%04x manuf=0x%04x zcl_status=0x%x",
+                 "OTA attr set failed cluster=0x%04x attr=0x%04x manuf=0x%04x zcl_status=0x%x",
                  ZIGBEE_OTA_CLUSTER_ID,
                  ZIGBEE_OTA_CONFIG_ATTR_ID,
                  ZIGBEE_OTA_MANUFACTURER_CODE,
@@ -108,7 +111,7 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
     esp_zb_lock_release();
 
     ESP_LOGI(TAG,
-             "HELLO report cluster=0x%04x attr=0x%04x manuf=0x%04x bytes=%u ret=%s(0x%x) payload=%s",
+             "OTA custom report cluster=0x%04x attr=0x%04x manuf=0x%04x bytes=%u ret=%s(0x%x) payload=%s",
              ZIGBEE_OTA_CLUSTER_ID,
              ZIGBEE_OTA_CONFIG_ATTR_ID,
              ZIGBEE_OTA_MANUFACTURER_CODE,
@@ -117,6 +120,72 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
              err,
              payload);
     return err;
+}
+
+static esp_err_t zigbee_ota_report_standard_probe(void)
+{
+    esp_zb_zcl_report_attr_cmd_t cmd = {
+        .zcl_basic_cmd = {
+            .dst_addr_u.addr_short = 0x0000,
+            .dst_endpoint = 1,
+            .src_endpoint = 1,
+        },
+        .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+        .clusterID = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI,
+        .dis_default_resp = 1,
+        .attributeID = ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID,
+    };
+
+    esp_zb_lock_acquire(portMAX_DELAY);
+    esp_err_t err = esp_zb_zcl_report_attr_cmd_req(&cmd);
+    esp_zb_lock_release();
+
+    ESP_LOGI(TAG,
+             "DIAG standard probe report endpoint=1 cluster=0x%04x attr=0x%04x ret=%s(0x%x)",
+             ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+             ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID,
+             esp_err_to_name(err),
+             err);
+    return err;
+}
+
+static void zigbee_ota_diag_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    if (!zigbee_ota_network_identity_valid()) {
+        ESP_LOGW(TAG, "DIAG PING ignored: Zigbee network identity is not usable");
+        s_diag_task_started = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "DIAG PING received; sending standard probe then custom PONG");
+    esp_err_t standard_err = zigbee_ota_report_standard_probe();
+    vTaskDelay(pdMS_TO_TICKS(250));
+    esp_err_t custom_err = zigbee_ota_report_payload(DIAG_PONG);
+    ESP_LOGI(TAG,
+             "DIAG result standard=%s custom=%s",
+             esp_err_to_name(standard_err),
+             esp_err_to_name(custom_err));
+
+    s_diag_task_started = false;
+    vTaskDelete(NULL);
+}
+
+static void zigbee_ota_schedule_diag(void)
+{
+    if (s_diag_task_started) {
+        ESP_LOGW(TAG, "DIAG PING ignored: diagnostic task already active");
+        return;
+    }
+    s_diag_task_started = true;
+    if (xTaskCreate(zigbee_ota_diag_task, "zb_ota_diag", 3072, NULL, 5, NULL) != pdPASS) {
+        s_diag_task_started = false;
+        ESP_LOGE(TAG, "DIAG task creation failed");
+    }
 }
 
 static esp_err_t send_secure_hello(void)
@@ -283,6 +352,14 @@ bool zigbee_ota_cluster_handle_set_attr(const esp_zb_zcl_set_attr_value_message_
     char payload[OTA_CONFIG_MAX_PAYLOAD_LEN + 1];
     memcpy(payload, &zcl_string[value_offset], payload_len);
     payload[payload_len] = '\0';
+
+    if (strcmp(payload, DIAG_PING) == 0) {
+        ESP_LOGI(TAG, "DIAG command received payload=%s", payload);
+        zigbee_ota_schedule_diag();
+        memset(payload, 0, sizeof(payload));
+        return true;
+    }
+
     if (!ota_service_request_payload(payload, payload_len)) {
         ESP_LOGW(TAG, "OTA ERROR: request ignored: busy or queue full");
     }
