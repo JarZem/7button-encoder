@@ -19,7 +19,7 @@
 static const char *TAG = "zigbee_ota_cluster";
 
 #define HELLO_STARTUP_QUIET_MS 4500
-#define HELLO_SIGNATURE_B64_MAX 88
+#define HELLO_SIGNATURE_B64_MAX 96
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
@@ -35,13 +35,25 @@ static bool zigbee_ota_is_joined(void)
 static esp_err_t base64url_encode(const uint8_t *input, size_t input_len,
                                   char *out, size_t out_size)
 {
+    if (input == NULL || out == NULL || out_size < 2) return ESP_ERR_INVALID_ARG;
+
     size_t written = 0;
-    int ret = mbedtls_base64_encode((unsigned char *)out, out_size - 1, &written, input, input_len);
-    if (ret != 0 || written >= out_size) return ESP_ERR_INVALID_SIZE;
+    int ret = mbedtls_base64_encode((unsigned char *)out, out_size, &written, input, input_len);
+    if (ret != 0 || written >= out_size) {
+        ESP_LOGE(TAG,
+                 "base64 encode failed ret=-0x%04x input_len=%u out_size=%u written=%u",
+                 (unsigned)(ret < 0 ? -ret : ret),
+                 (unsigned)input_len,
+                 (unsigned)out_size,
+                 (unsigned)written);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     for (size_t i = 0; i < written; ++i) {
         if (out[i] == '+') out[i] = '-';
         else if (out[i] == '/') out[i] = '_';
     }
+
     while (written > 0 && out[written - 1] == '=') --written;
     out[written] = '\0';
     return ESP_OK;
@@ -121,10 +133,11 @@ static esp_err_t send_secure_hello(const char *device_id)
     if (payload_len <= 0 || payload_len > ZIGBEE_OTA_HELLO_FRAME_MAX) return ESP_ERR_INVALID_SIZE;
 
     ESP_LOGI(TAG,
-             "HELLO single-frame device_id=%s counter=%" PRIu64 " signed_bytes=%u frame_bytes=%u",
+             "HELLO single-frame device_id=%s counter=%" PRIu64 " signed_bytes=%u signature_b64_len=%u frame_bytes=%u",
              device_id,
              counter,
              (unsigned)canonical_len,
+             (unsigned)strlen(signature_b64),
              (unsigned)payload_len);
 
     esp_err_t err = zigbee_ota_report_payload(payload);
