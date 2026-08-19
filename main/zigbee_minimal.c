@@ -1054,6 +1054,11 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
             return zb_attribute_handler((const esp_zb_zcl_set_attr_value_message_t *)message);
         case ESP_ZB_CORE_CMD_PRIVILEGE_COMMAND_REQ_CB_ID:
             return zb_privilege_command_handler((const esp_zb_zcl_privilege_command_message_t *)message);
+        case ESP_ZB_CORE_CMD_CUSTOM_CLUSTER_REQ_CB_ID:
+            return zigbee_ota_cluster_handle_custom_cmd(
+                       (const esp_zb_zcl_custom_cluster_command_message_t *)message)
+                       ? ESP_OK
+                       : ESP_ERR_INVALID_ARG;
         default:
             ESP_LOGI(TAG, "action callback=0x%x", callback_id);
             return ESP_OK;
@@ -1131,7 +1136,7 @@ static void zigbee_task(void *arg)
     ESP_LOGI(TAG, "privilege OTA enrollment commands registered");
 
     esp_zb_core_action_handler_register(zb_action_handler);
-    ESP_LOGI(TAG, "action handler registered");
+    ESP_LOGI(TAG, "action handler registered incl. custom OTA cluster request callback");
 
     esp_zb_set_rx_on_when_idle(true);
     ESP_LOGI(TAG, "rx_on_when_idle=%s", esp_zb_get_rx_on_when_idle() ? "true" : "false");
