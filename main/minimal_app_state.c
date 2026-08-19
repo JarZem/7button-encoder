@@ -68,7 +68,13 @@ static void log_state(const char *reason)
 
 static void commit_state_change(const char *reason)
 {
-    zigbee_minimal_apply_state(&s_state, s_ota_enabled, true);
+    /* Stabilization mode: update Zigbee attributes but do not fan out the
+     * complete 9x OnOff + Level + Color report burst after every state
+     * change. Incoming HA commands are already acknowledged/reported by the
+     * Zigbee attribute callback itself. Initial reports after join remain in
+     * zigbee_minimal.c. Local input reporting will be restored selectively
+     * after the transport is stable. */
+    zigbee_minimal_apply_state(&s_state, s_ota_enabled, false);
     storage_schedule_save(&s_state);
     log_state(reason);
 }
