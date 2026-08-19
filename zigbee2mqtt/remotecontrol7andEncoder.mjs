@@ -187,7 +187,7 @@ const remoteToOtaCommand = {
             OTA_CLUSTER_NAME,
             OTA_CMD_TO_DEVICE,
             {payload: value},
-            {disableDefaultResponse: false, manufacturerCode: OTA_MANUFACTURER_CODE},
+            {disableDefaultResponse: true, manufacturerCode: OTA_MANUFACTURER_CODE},
         );
         return {state: {}};
     },
