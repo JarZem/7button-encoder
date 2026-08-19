@@ -4,13 +4,25 @@
 
 #include "esp_log.h"
 #include "esp_zigbee_core.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "ota_config.h"
 #include "ota_service.h"
 #include "zcl/esp_zigbee_zcl_common.h"
 
 static const char *TAG = "zigbee_ota_cluster";
 
+#define TEST_HELLO_DELAY_MS 5000
+
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
+static bool s_test_hello_started;
+
+static bool zigbee_ota_network_identity_valid(void)
+{
+    if (esp_zb_bdb_is_factory_new()) return false;
+    const uint16_t short_addr = esp_zb_get_short_address();
+    return short_addr != 0x0000 && short_addr != 0xfffe && short_addr != 0xffff;
+}
 
 static esp_err_t zigbee_ota_report_payload(const char *payload)
 {
@@ -64,13 +76,39 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
     return err;
 }
 
+static void test_hello_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(TEST_HELLO_DELAY_MS));
+
+    if (!zigbee_ota_network_identity_valid()) {
+        ESP_LOGW(TAG,
+                 "TEST HELLO not sent: network identity invalid factory_new=%d short=0x%04x",
+                 esp_zb_bdb_is_factory_new(),
+                 esp_zb_get_short_address());
+    } else {
+        ESP_LOGI(TAG,
+                 "TEST HELLO network identity valid channel=%u short=0x%04x; sending H|TEST",
+                 esp_zb_get_current_channel(),
+                 esp_zb_get_short_address());
+        esp_err_t err = zigbee_ota_report_payload("H|TEST");
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "TEST HELLO send failed: %s", esp_err_to_name(err));
+        }
+    }
+
+    s_test_hello_started = false;
+    vTaskDelete(NULL);
+}
+
 void zigbee_ota_schedule_hello(uint32_t delay_ms)
 {
     (void)delay_ms;
-    ESP_LOGI(TAG, "TEST HELLO sending minimal payload after confirmed join");
-    esp_err_t err = zigbee_ota_report_payload("H|TEST");
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "TEST HELLO send failed: %s", esp_err_to_name(err));
+    if (s_test_hello_started) return;
+    s_test_hello_started = true;
+    if (xTaskCreate(test_hello_task, "zb_hello_test", 3072, NULL, 5, NULL) != pdPASS) {
+        s_test_hello_started = false;
+        ESP_LOGE(TAG, "TEST HELLO task creation failed");
     }
 }
 
@@ -91,10 +129,12 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
         s_ota_payload_attr);
     if (err == ESP_OK) {
         ESP_LOGI(TAG,
-                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x; TEST HELLO mode",
+                 "manufacturer OTA attribute registered cluster=0x%04x attr=0x%04x manuf=0x%04x; scheduling H|TEST in %u ms",
                  ZIGBEE_OTA_CLUSTER_ID,
                  ZIGBEE_OTA_CONFIG_ATTR_ID,
-                 ZIGBEE_OTA_MANUFACTURER_CODE);
+                 ZIGBEE_OTA_MANUFACTURER_CODE,
+                 TEST_HELLO_DELAY_MS);
+        zigbee_ota_schedule_hello(TEST_HELLO_DELAY_MS);
     }
     return err;
 }
