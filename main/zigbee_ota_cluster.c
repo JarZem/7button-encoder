@@ -2,6 +2,7 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "device_credentials.h"
@@ -23,12 +24,16 @@ static const char *TAG = "zigbee_ota_cluster";
 #define HELLO_SIGNATURE_B64_MAX 96
 #define DIAG_PING "D|PING"
 #define DIAG_PONG "D|PONG"
+#define DIAG_LEN_PREFIX "D|LEN|"
+#define DIAG_LEN_MIN 6
+#define DIAG_LEN_MAX 100
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
 static bool s_hello_sent_this_boot;
 static bool s_diag_task_started;
 static uint32_t s_hello_delay_ms;
+static size_t s_diag_payload_len;
 
 static bool zigbee_ota_network_identity_valid(void)
 {
@@ -122,65 +127,57 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
     return err;
 }
 
-static esp_err_t zigbee_ota_report_standard_probe(void)
+static void zigbee_ota_make_diag_payload(char *payload, size_t payload_size, size_t payload_len)
 {
-    esp_zb_zcl_report_attr_cmd_t cmd = {
-        .zcl_basic_cmd = {
-            .dst_addr_u.addr_short = 0x0000,
-            .dst_endpoint = 1,
-            .src_endpoint = 1,
-        },
-        .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-        .clusterID = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
-        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI,
-        .dis_default_resp = 1,
-        .attributeID = ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID,
-    };
+    if (payload == NULL || payload_size == 0) return;
+    if (payload_len >= payload_size) payload_len = payload_size - 1;
 
-    esp_zb_lock_acquire(portMAX_DELAY);
-    esp_err_t err = esp_zb_zcl_report_attr_cmd_req(&cmd);
-    esp_zb_lock_release();
-
-    ESP_LOGI(TAG,
-             "DIAG standard probe report endpoint=1 cluster=0x%04x attr=0x%04x ret=%s(0x%x)",
-             ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
-             ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID,
-             esp_err_to_name(err),
-             err);
-    return err;
+    int prefix_len = snprintf(payload, payload_size, "D|L%03u|", (unsigned)payload_len);
+    if (prefix_len < 0) {
+        payload[0] = '\0';
+        return;
+    }
+    size_t used = (size_t)prefix_len;
+    if (used > payload_len) used = payload_len;
+    for (size_t i = used; i < payload_len; ++i) payload[i] = (char)('A' + (i % 26));
+    payload[payload_len] = '\0';
 }
 
 static void zigbee_ota_diag_task(void *arg)
 {
     (void)arg;
+    const size_t payload_len = s_diag_payload_len;
     vTaskDelay(pdMS_TO_TICKS(100));
 
     if (!zigbee_ota_network_identity_valid()) {
-        ESP_LOGW(TAG, "DIAG PING ignored: Zigbee network identity is not usable");
+        ESP_LOGW(TAG, "DIAG ignored: Zigbee network identity is not usable");
         s_diag_task_started = false;
         vTaskDelete(NULL);
         return;
     }
 
-    ESP_LOGI(TAG, "DIAG PING received; sending standard probe then custom PONG");
-    esp_err_t standard_err = zigbee_ota_report_standard_probe();
-    vTaskDelay(pdMS_TO_TICKS(250));
-    esp_err_t custom_err = zigbee_ota_report_payload(DIAG_PONG);
-    ESP_LOGI(TAG,
-             "DIAG result standard=%s custom=%s",
-             esp_err_to_name(standard_err),
-             esp_err_to_name(custom_err));
+    char payload[DIAG_LEN_MAX + 1];
+    if (payload_len == 0) {
+        strcpy(payload, DIAG_PONG);
+    } else {
+        zigbee_ota_make_diag_payload(payload, sizeof(payload), payload_len);
+    }
+
+    ESP_LOGI(TAG, "DIAG custom payload test bytes=%u", (unsigned)strlen(payload));
+    esp_err_t custom_err = zigbee_ota_report_payload(payload);
+    ESP_LOGI(TAG, "DIAG result bytes=%u custom=%s", (unsigned)strlen(payload), esp_err_to_name(custom_err));
 
     s_diag_task_started = false;
     vTaskDelete(NULL);
 }
 
-static void zigbee_ota_schedule_diag(void)
+static void zigbee_ota_schedule_diag(size_t payload_len)
 {
     if (s_diag_task_started) {
-        ESP_LOGW(TAG, "DIAG PING ignored: diagnostic task already active");
+        ESP_LOGW(TAG, "DIAG ignored: diagnostic task already active");
         return;
     }
+    s_diag_payload_len = payload_len;
     s_diag_task_started = true;
     if (xTaskCreate(zigbee_ota_diag_task, "zb_ota_diag", 3072, NULL, 5, NULL) != pdPASS) {
         s_diag_task_started = false;
@@ -240,9 +237,7 @@ static void zigbee_ota_hello_task(void *arg)
 {
     (void)arg;
     const uint32_t delay_ms = s_hello_delay_ms;
-    if (delay_ms > 0) {
-        vTaskDelay(pdMS_TO_TICKS(delay_ms));
-    }
+    if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
 
     for (unsigned attempt = 1; attempt <= HELLO_WAIT_ATTEMPTS; ++attempt) {
         if (!zigbee_ota_network_identity_valid()) {
@@ -256,23 +251,15 @@ static void zigbee_ota_hello_task(void *arg)
             continue;
         }
 
-        ESP_LOGI(TAG,
-                 "HELLO network ready channel=%u short=0x%04x",
-                 esp_zb_get_current_channel(),
-                 esp_zb_get_short_address());
+        ESP_LOGI(TAG, "HELLO network ready channel=%u short=0x%04x",
+                 esp_zb_get_current_channel(), esp_zb_get_short_address());
         esp_err_t err = send_secure_hello();
-        if (err == ESP_OK) {
-            s_hello_sent_this_boot = true;
-        } else {
-            ESP_LOGW(TAG, "HELLO send failed: %s", esp_err_to_name(err));
-        }
+        if (err == ESP_OK) s_hello_sent_this_boot = true;
+        else ESP_LOGW(TAG, "HELLO send failed: %s", esp_err_to_name(err));
         break;
     }
 
-    if (!s_hello_sent_this_boot) {
-        ESP_LOGW(TAG, "HELLO not submitted during startup window");
-    }
-
+    if (!s_hello_sent_this_boot) ESP_LOGW(TAG, "HELLO not submitted during startup window");
     s_hello_task_started = false;
     vTaskDelete(NULL);
 }
@@ -354,7 +341,22 @@ bool zigbee_ota_cluster_handle_set_attr(const esp_zb_zcl_set_attr_value_message_
 
     if (strcmp(payload, DIAG_PING) == 0) {
         ESP_LOGI(TAG, "DIAG command received payload=%s", payload);
-        zigbee_ota_schedule_diag();
+        zigbee_ota_schedule_diag(0);
+        memset(payload, 0, sizeof(payload));
+        return true;
+    }
+
+    if (strncmp(payload, DIAG_LEN_PREFIX, strlen(DIAG_LEN_PREFIX)) == 0) {
+        char *end = NULL;
+        unsigned long requested = strtoul(payload + strlen(DIAG_LEN_PREFIX), &end, 10);
+        if (end == payload + strlen(DIAG_LEN_PREFIX) || *end != '\0' ||
+            requested < DIAG_LEN_MIN || requested > DIAG_LEN_MAX) {
+            ESP_LOGW(TAG, "DIAG LEN invalid payload=%s allowed=%u..%u",
+                     payload, DIAG_LEN_MIN, DIAG_LEN_MAX);
+        } else {
+            ESP_LOGI(TAG, "DIAG LEN command received requested_bytes=%lu", requested);
+            zigbee_ota_schedule_diag((size_t)requested);
+        }
         memset(payload, 0, sizeof(payload));
         return true;
     }
