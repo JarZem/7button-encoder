@@ -12,6 +12,8 @@ const OTA_AUTH_CHALLENGE_RE = /^A\|[0-9a-fA-F]{16}\|[0-9a-fA-F]{64}$/;
 const OTA_DIAG_LEN_RE = /^D\|LEN\|(100|[1-9][0-9]?)$/;
 const OTA_CLUSTER_NAME = 'jarzemOta';
 const OTA_ATTR_NAME = 'otaCommand';
+const OTA_CMD_TO_DEVICE = 'otaToDevice';
+const OTA_CMD_FROM_DEVICE = 'otaFromDevice';
 
 const ENDPOINTS = {
     switch1: 1,
@@ -30,27 +32,21 @@ const COLOR_TEMP_MAX_MIRED = 333;
 
 const endpointNameById = (endpointId) => {
     for (const [name, id] of Object.entries(ENDPOINTS)) {
-        if (id === endpointId) {
-            return name;
-        }
+        if (id === endpointId) return name;
     }
     return undefined;
 };
 
 const clampNumber = (value, min, max) => {
     const number = Number(value);
-    if (!Number.isFinite(number)) {
-        return min;
-    }
+    if (!Number.isFinite(number)) return min;
     return Math.min(max, Math.max(min, Math.round(number)));
 };
 
 const lightEndpoint = (entity, meta) => meta?.device?.getEndpoint(ENDPOINTS.light) ?? entity;
 
 const endpointNameFromStateKey = (key, entity, meta) => {
-    if (typeof key === 'string' && key.startsWith('state_')) {
-        return key.slice('state_'.length);
-    }
+    if (typeof key === 'string' && key.startsWith('state_')) return key.slice('state_'.length);
     return meta?.endpoint_name ?? endpointNameById(entity.ID);
 };
 
@@ -60,56 +56,34 @@ const endpointForName = (entity, meta, endpointName) => {
 };
 
 const validateOtaCommand = (value) => {
-    if (typeof value !== 'string') {
-        throw new Error('OTA command must be a string');
-    }
+    if (typeof value !== 'string') throw new Error('OTA command must be a string');
     if (value.length < 1 || value.length > OTA_COMMAND_MAX_LEN) {
         throw new Error(`OTA command length must be 1-${OTA_COMMAND_MAX_LEN} characters`);
     }
-
-    if (value === 'D|PING' || value === 'D|STOP' || OTA_DIAG_LEN_RE.test(value)) {
-        return;
-    }
-
+    if (value === 'D|PING' || value === 'D|STOP' || OTA_DIAG_LEN_RE.test(value)) return;
     if (value.startsWith('A|')) {
-        if (!OTA_AUTH_CHALLENGE_RE.test(value)) {
-            throw new Error('OTA auth challenge must be A|<16 hex message_id>|<64 hex challenge>');
-        }
+        if (!OTA_AUTH_CHALLENGE_RE.test(value)) throw new Error('OTA auth challenge must be A|<16 hex message_id>|<64 hex challenge>');
         return;
     }
-
     if (value.startsWith('C|')) {
         const token = value.slice(2);
-        if (!OTA_TOKEN_RE.test(token)) {
-            throw new Error('OTA check token must be exactly 16 base64url characters');
-        }
+        if (!OTA_TOKEN_RE.test(token)) throw new Error('OTA check token must be exactly 16 base64url characters');
         return;
     }
-
     const provisioning = value.startsWith('P|') ? value.slice(2) : value;
     const fields = provisioning.split('|');
-    if (fields.length !== 5) {
-        throw new Error('OTA command must be D|PING, D|LEN|N, D|STOP, provisioning, C|TOKEN, or A|MESSAGE_ID|CHALLENGE');
-    }
-    if (!OTA_CODE_RE.test(fields[3])) {
-        throw new Error('OTA firmware code must be exactly 3 alphanumeric characters');
-    }
-    if (!OTA_TOKEN_RE.test(fields[4])) {
-        throw new Error('OTA token must be exactly 16 base64url characters');
-    }
+    if (fields.length !== 5) throw new Error('OTA command must be D|PING, D|LEN|N, D|STOP, provisioning, C|TOKEN, or A|MESSAGE_ID|CHALLENGE');
+    if (!OTA_CODE_RE.test(fields[3])) throw new Error('OTA firmware code must be exactly 3 alphanumeric characters');
+    if (!OTA_TOKEN_RE.test(fields[4])) throw new Error('OTA token must be exactly 16 base64url characters');
 };
 
 const remoteFromOnOff = {
     cluster: 'genOnOff',
     type: ['attributeReport', 'readResponse'],
     convert: (model, msg) => {
-        if (msg.data.onOff === undefined) {
-            return;
-        }
+        if (msg.data.onOff === undefined) return;
         const endpointName = endpointNameById(msg.endpoint.ID);
-        if (!endpointName) {
-            return;
-        }
+        if (!endpointName) return;
         return {[`state_${endpointName}`]: msg.data.onOff ? 'ON' : 'OFF'};
     },
 };
@@ -118,9 +92,7 @@ const remoteFromBrightness = {
     cluster: 'genLevelCtrl',
     type: ['attributeReport', 'readResponse'],
     convert: (model, msg) => {
-        if (msg.endpoint.ID !== ENDPOINTS.light || msg.data.currentLevel === undefined) {
-            return;
-        }
+        if (msg.endpoint.ID !== ENDPOINTS.light || msg.data.currentLevel === undefined) return;
         return {brightness_light: msg.data.currentLevel};
     },
 };
@@ -129,103 +101,72 @@ const remoteFromColorTemperature = {
     cluster: 'lightingColorCtrl',
     type: ['attributeReport', 'readResponse'],
     convert: (model, msg) => {
-        if (msg.endpoint.ID !== ENDPOINTS.light) {
-            return;
-        }
-
+        if (msg.endpoint.ID !== ENDPOINTS.light) return;
         const result = {};
-        if (msg.data.colorTemperature !== undefined) {
-            result.color_temp_light = msg.data.colorTemperature;
-        }
-        if (msg.data.colorMode !== undefined) {
-            result.color_mode_light = msg.data.colorMode === 2 ? 'color_temp' : msg.data.colorMode;
-        }
+        if (msg.data.colorTemperature !== undefined) result.color_temp_light = msg.data.colorTemperature;
+        if (msg.data.colorMode !== undefined) result.color_mode_light = msg.data.colorMode === 2 ? 'color_temp' : msg.data.colorMode;
         return Object.keys(result).length > 0 ? result : undefined;
     },
 };
 
-const remoteFromOtaCommand = {
+/* Legacy Report Attributes receive path retained while migration is tested. */
+const remoteFromOtaAttribute = {
     cluster: OTA_CLUSTER_NAME,
     type: ['attributeReport', 'readResponse'],
     convert: (model, msg) => {
-        if (msg.meta?.manufacturerCode !== undefined && msg.meta.manufacturerCode !== OTA_MANUFACTURER_CODE) {
-            return;
-        }
         const value = msg.data?.[OTA_ATTR_NAME] ?? msg.data?.[OTA_CONFIG_ATTR_ID] ?? msg.data?.[String(OTA_CONFIG_ATTR_ID)];
-        if (value === undefined || value === null) {
-            return;
-        }
+        if (value === undefined || value === null) return;
+        return {action: String(value)};
+    },
+};
 
+/* New server->client custom command transport from ESP. */
+const remoteFromOtaCommand = {
+    cluster: OTA_CLUSTER_NAME,
+    type: ['commandOtaFromDevice'],
+    convert: (model, msg) => {
+        const value = msg.data?.payload;
+        if (value === undefined || value === null) return;
         return {action: String(value)};
     },
 };
 
 const remoteToOnOff = {
-    key: [
-        'state',
-        'state_switch1',
-        'state_switch2',
-        'state_switch3',
-        'state_switch4',
-        'state_switch5',
-        'state_switch6',
-        'state_enable_rs232',
-        'state_enable_ota',
-        'state_light',
-    ],
+    key: ['state','state_switch1','state_switch2','state_switch3','state_switch4','state_switch5','state_switch6','state_enable_rs232','state_enable_ota','state_light'],
     convertSet: async (entity, key, value, meta) => {
         const endpointName = endpointNameFromStateKey(key, entity, meta);
         const state = String(value).toUpperCase();
         const command = state === 'ON' ? 'on' : state === 'OFF' ? 'off' : 'toggle';
         await endpointForName(entity, meta, endpointName).command('genOnOff', command, {}, {disableDefaultResponse: false});
     },
-    convertGet: async (entity) => {
-        await entity.read('genOnOff', ['onOff']);
-    },
+    convertGet: async (entity) => { await entity.read('genOnOff', ['onOff']); },
 };
 
 const remoteToBrightness = {
     key: ['brightness', 'brightness_light'],
     convertSet: async (entity, key, value, meta) => {
         const brightness = clampNumber(value, 0, 254);
-        await lightEndpoint(entity, meta).command(
-            'genLevelCtrl',
-            'moveToLevel',
-            {level: brightness, transtime: 0},
-            {disableDefaultResponse: false},
-        );
+        await lightEndpoint(entity, meta).command('genLevelCtrl', 'moveToLevel', {level: brightness, transtime: 0}, {disableDefaultResponse: false});
     },
-    convertGet: async (entity, key, meta) => {
-        await lightEndpoint(entity, meta).read('genLevelCtrl', ['currentLevel']);
-    },
+    convertGet: async (entity, key, meta) => { await lightEndpoint(entity, meta).read('genLevelCtrl', ['currentLevel']); },
 };
 
 const remoteToColorTemperature = {
     key: ['color_temp', 'color_temp_light'],
     convertSet: async (entity, key, value, meta) => {
         const colorTemp = clampNumber(value, COLOR_TEMP_MIN_MIRED, COLOR_TEMP_MAX_MIRED);
-        await lightEndpoint(entity, meta).command(
-            'lightingColorCtrl',
-            'moveToColorTemp',
-            {colortemp: colorTemp, transtime: 0},
-            {disableDefaultResponse: false},
-        );
+        await lightEndpoint(entity, meta).command('lightingColorCtrl', 'moveToColorTemp', {colortemp: colorTemp, transtime: 0}, {disableDefaultResponse: false});
     },
-    convertGet: async (entity, key, meta) => {
-        await lightEndpoint(entity, meta).read('lightingColorCtrl', ['colorTemperature', 'colorMode']);
-    },
+    convertGet: async (entity, key, meta) => { await lightEndpoint(entity, meta).read('lightingColorCtrl', ['colorTemperature', 'colorMode']); },
 };
 
+/* Inbound remains legacy attribute-write for this first transport test. It is short for D|LEN|N/PING. */
 const remoteToOtaCommand = {
     key: ['ota_command'],
     convertSet: async (entity, key, value, meta) => {
         validateOtaCommand(value);
         const endpoint = meta.device.getEndpoint(ENDPOINTS.switch1) ?? entity;
-        await endpoint.write(
-            OTA_CLUSTER_NAME,
-            {[OTA_ATTR_NAME]: value},
-            {disableDefaultResponse: false, manufacturerCode: OTA_MANUFACTURER_CODE},
-        );
+        await endpoint.write(OTA_CLUSTER_NAME, {[OTA_ATTR_NAME]: value}, {disableDefaultResponse: false, manufacturerCode: OTA_MANUFACTURER_CODE});
         return {state: {}};
     },
 };
@@ -244,29 +185,31 @@ const definition = {
             ID: OTA_CLUSTER_ID,
             manufacturerCode: OTA_MANUFACTURER_CODE,
             attributes: {
-                [OTA_ATTR_NAME]: {
-                    name: OTA_ATTR_NAME,
-                    ID: OTA_CONFIG_ATTR_ID,
-                    type: Zcl.DataType.CHAR_STR,
-                    write: true,
+                [OTA_ATTR_NAME]: {name: OTA_ATTR_NAME, ID: OTA_CONFIG_ATTR_ID, type: Zcl.DataType.CHAR_STR, write: true},
+            },
+            commands: {
+                [OTA_CMD_TO_DEVICE]: {
+                    name: OTA_CMD_TO_DEVICE,
+                    ID: 0x10,
+                    parameters: [{name: 'payload', type: Zcl.DataType.CHAR_STR}],
                 },
             },
-            commands: {},
-            commandsResponse: {},
+            commandsResponse: {
+                [OTA_CMD_FROM_DEVICE]: {
+                    name: OTA_CMD_FROM_DEVICE,
+                    ID: 0x11,
+                    parameters: [{name: 'payload', type: Zcl.DataType.CHAR_STR}],
+                },
+            },
         }),
     ],
-    fromZigbee: [remoteFromOnOff, remoteFromBrightness, remoteFromColorTemperature, remoteFromOtaCommand],
+    fromZigbee: [remoteFromOnOff, remoteFromBrightness, remoteFromColorTemperature, remoteFromOtaAttribute, remoteFromOtaCommand],
     toZigbee: [remoteToOnOff, remoteToBrightness, remoteToColorTemperature, remoteToOtaCommand],
     exposes: [
         e.light().withBrightness().withColorTemp([COLOR_TEMP_MIN_MIRED, COLOR_TEMP_MAX_MIRED]).withEndpoint('light'),
-        e.switch().withEndpoint('switch1'),
-        e.switch().withEndpoint('switch2'),
-        e.switch().withEndpoint('switch3'),
-        e.switch().withEndpoint('switch4'),
-        e.switch().withEndpoint('switch5'),
-        e.switch().withEndpoint('switch6'),
-        e.switch().withEndpoint('enable_rs232'),
-        e.switch().withEndpoint('enable_ota'),
+        e.switch().withEndpoint('switch1'), e.switch().withEndpoint('switch2'), e.switch().withEndpoint('switch3'),
+        e.switch().withEndpoint('switch4'), e.switch().withEndpoint('switch5'), e.switch().withEndpoint('switch6'),
+        e.switch().withEndpoint('enable_rs232'), e.switch().withEndpoint('enable_ota'),
     ],
     endpoint: () => ENDPOINTS,
     options: [],
@@ -280,11 +223,10 @@ const definition = {
             }
             await endpoint.read('genOnOff', ['onOff']);
         }
-
-        const lightEndpoint = device.getEndpoint(ENDPOINTS.light);
-        if (lightEndpoint) {
-            await lightEndpoint.read('genLevelCtrl', ['currentLevel']);
-            await lightEndpoint.read('lightingColorCtrl', ['colorTemperature', 'colorMode']);
+        const lep = device.getEndpoint(ENDPOINTS.light);
+        if (lep) {
+            await lep.read('genLevelCtrl', ['currentLevel']);
+            await lep.read('lightingColorCtrl', ['colorTemperature', 'colorMode']);
         }
     },
 };
