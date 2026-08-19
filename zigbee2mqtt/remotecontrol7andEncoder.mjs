@@ -4,6 +4,7 @@ import {Zcl} from 'zigbee-herdsman';
 
 const OTA_CLUSTER_ID = 0xfc00;
 const OTA_CONFIG_ATTR_ID = 0x0001;
+const OTA_MANUFACTURER_CODE = 0x1234;
 const OTA_COMMAND_MAX_LEN = 254;
 const OTA_CODE_RE = /^[0-9A-Za-z]{3}$/;
 const OTA_TOKEN_RE = /^[0-9A-Za-z_-]{16}$/;
@@ -142,6 +143,9 @@ const remoteFromOtaCommand = {
     cluster: OTA_CLUSTER_NAME,
     type: ['attributeReport', 'readResponse'],
     convert: (model, msg) => {
+        if (msg.meta?.manufacturerCode !== undefined && msg.meta.manufacturerCode !== OTA_MANUFACTURER_CODE) {
+            return;
+        }
         const value = msg.data?.[OTA_ATTR_NAME] ?? msg.data?.[OTA_CONFIG_ATTR_ID] ?? msg.data?.[String(OTA_CONFIG_ATTR_ID)];
         if (value === undefined || value === null) {
             return;
@@ -215,7 +219,7 @@ const remoteToOtaCommand = {
         await endpoint.write(
             OTA_CLUSTER_NAME,
             {[OTA_ATTR_NAME]: value},
-            {disableDefaultResponse: false},
+            {disableDefaultResponse: false, manufacturerCode: OTA_MANUFACTURER_CODE},
         );
         return {state: {}};
     },
@@ -233,6 +237,7 @@ const definition = {
         m.deviceAddCustomCluster(OTA_CLUSTER_NAME, {
             name: OTA_CLUSTER_NAME,
             ID: OTA_CLUSTER_ID,
+            manufacturerCode: OTA_MANUFACTURER_CODE,
             attributes: {
                 [OTA_ATTR_NAME]: {
                     name: OTA_ATTR_NAME,
