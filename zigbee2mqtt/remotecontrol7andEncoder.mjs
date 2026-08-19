@@ -9,6 +9,7 @@ const OTA_COMMAND_MAX_LEN = 254;
 const OTA_CODE_RE = /^[0-9A-Za-z]{3}$/;
 const OTA_TOKEN_RE = /^[0-9A-Za-z_-]{16}$/;
 const OTA_AUTH_CHALLENGE_RE = /^A\|[0-9a-fA-F]{16}\|[0-9a-fA-F]{64}$/;
+const OTA_DIAG_LEN_RE = /^D\|LEN\|(100|[1-9][0-9]?)$/;
 const OTA_CLUSTER_NAME = 'jarzemOta';
 const OTA_ATTR_NAME = 'otaCommand';
 
@@ -66,7 +67,7 @@ const validateOtaCommand = (value) => {
         throw new Error(`OTA command length must be 1-${OTA_COMMAND_MAX_LEN} characters`);
     }
 
-    if (value === 'D|PING') {
+    if (value === 'D|PING' || value === 'D|STOP' || OTA_DIAG_LEN_RE.test(value)) {
         return;
     }
 
@@ -88,7 +89,7 @@ const validateOtaCommand = (value) => {
     const provisioning = value.startsWith('P|') ? value.slice(2) : value;
     const fields = provisioning.split('|');
     if (fields.length !== 5) {
-        throw new Error('OTA command must be D|PING, provisioning, C|TOKEN, or A|MESSAGE_ID|CHALLENGE');
+        throw new Error('OTA command must be D|PING, D|LEN|N, D|STOP, provisioning, C|TOKEN, or A|MESSAGE_ID|CHALLENGE');
     }
     if (!OTA_CODE_RE.test(fields[3])) {
         throw new Error('OTA firmware code must be exactly 3 alphanumeric characters');
