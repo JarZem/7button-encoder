@@ -19,6 +19,11 @@ extern "C" {
 #define ZIGBEE_OTA_CMD_FROM_DEVICE_ID            0x11
 #define ZIGBEE_OTA_ENDPOINT                      1
 
+/* Legacy command IDs are still registered by zigbee_minimal.c during migration. */
+#define ZIGBEE_OTA_CMD_DEVICE_AUTH_CHALLENGE_ID  0x04
+#define ZIGBEE_OTA_CMD_DEVICE_ENROLL_ID          0x05
+#define ZIGBEE_OTA_CMD_COMMAND_ACK_ID             0x06
+
 /* Legacy attribute is kept only for backward compatibility during migration. */
 #define ZIGBEE_OTA_ZCL_STRING_CAPACITY           40
 
