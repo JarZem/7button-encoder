@@ -86,14 +86,15 @@ static esp_err_t zigbee_ota_send_command_payload(const char *payload)
     cmd.data.value = wire;
 
     esp_zb_lock_acquire(portMAX_DELAY);
-    esp_err_t err = esp_zb_zcl_custom_cluster_cmd_req(&cmd);
+    /* ESP Zigbee SDK 1.x returns the ZCL transaction sequence number here, not esp_err_t. */
+    const uint8_t tsn = esp_zb_zcl_custom_cluster_cmd_req(&cmd);
     esp_zb_lock_release();
 
     ESP_LOGI(TAG,
-             "OTA custom command tx cluster=0x%04x cmd=0x%02x bytes=%u ret=%s(0x%x) payload=%s",
+             "OTA custom command tx cluster=0x%04x cmd=0x%02x bytes=%u tsn=0x%02x payload=%s",
              ZIGBEE_OTA_CLUSTER_ID, ZIGBEE_OTA_CMD_FROM_DEVICE_ID,
-             (unsigned)payload_len, esp_err_to_name(err), err, payload);
-    return err;
+             (unsigned)payload_len, tsn, payload);
+    return ESP_OK;
 }
 
 static void zigbee_ota_diag_task(void *arg)
