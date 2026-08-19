@@ -8,7 +8,6 @@
 #include "device_identity.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "esp_random.h"
 #include "esp_zigbee_core.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -19,10 +18,8 @@
 
 static const char *TAG = "zigbee_ota_cluster";
 
-#define HELLO_PROTOCOL_VERSION 1
-#define HELLO_FRAGMENT_DATA_LEN 44
-#define HELLO_SIGNATURE_B64_MAX 128
 #define HELLO_STARTUP_QUIET_MS 4500
+#define HELLO_SIGNATURE_B64_MAX 88
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
@@ -48,20 +45,6 @@ static esp_err_t base64url_encode(const uint8_t *input, size_t input_len,
     while (written > 0 && out[written - 1] == '=') --written;
     out[written] = '\0';
     return ESP_OK;
-}
-
-static unsigned fragment_count(size_t len)
-{
-    return (unsigned)((len + HELLO_FRAGMENT_DATA_LEN - 1) / HELLO_FRAGMENT_DATA_LEN);
-}
-
-static void compact_device_id(const char *device_id, char compact[17])
-{
-    size_t pos = 0;
-    for (size_t i = 0; device_id[i] != '\0' && pos < 16; ++i) {
-        if (device_id[i] != ':') compact[pos++] = device_id[i];
-    }
-    compact[pos] = '\0';
 }
 
 static esp_err_t zigbee_ota_report_payload(const char *payload)
@@ -110,30 +93,6 @@ static esp_err_t zigbee_ota_report_payload(const char *payload)
     return err;
 }
 
-static esp_err_t send_signature_fragments(const char *tx, const char *signature_b64, unsigned total)
-{
-    const size_t len = strlen(signature_b64);
-    for (unsigned index = 0; index < total; ++index) {
-        const size_t offset = (size_t)index * HELLO_FRAGMENT_DATA_LEN;
-        const size_t remain = len - offset;
-        const size_t chunk_len = remain < HELLO_FRAGMENT_DATA_LEN ? remain : HELLO_FRAGMENT_DATA_LEN;
-        char chunk[HELLO_FRAGMENT_DATA_LEN + 1];
-        memcpy(chunk, signature_b64 + offset, chunk_len);
-        chunk[chunk_len] = '\0';
-
-        char payload[ZIGBEE_OTA_HELLO_FRAME_MAX + 1];
-        int n = snprintf(payload, sizeof(payload), "S|%s|%u|%u|%s",
-                         tx, index, total, chunk);
-        if (n <= 0 || n > ZIGBEE_OTA_HELLO_FRAME_MAX) return ESP_ERR_INVALID_SIZE;
-        esp_err_t err = zigbee_ota_report_payload(payload);
-        ESP_LOGI(TAG, "HELLO signature fragment tx=%s index=%u/%u send=%s(0x%x)",
-                 tx, index + 1, total, esp_err_to_name(err), err);
-        ESP_RETURN_ON_ERROR(err, TAG, "HELLO signature fragment send failed");
-        vTaskDelay(pdMS_TO_TICKS(120));
-    }
-    return ESP_OK;
-}
-
 static esp_err_t send_secure_hello(const char *device_id)
 {
     ESP_RETURN_ON_ERROR(device_credentials_init(), TAG, "device credentials unavailable");
@@ -141,50 +100,39 @@ static esp_err_t send_secure_hello(const char *device_id)
     uint64_t counter = 0;
     ESP_RETURN_ON_ERROR(device_identity_next_enrollment_counter(&counter), TAG, "HELLO counter update failed");
 
-    char compact_id[17];
-    compact_device_id(device_id, compact_id);
-    if (strlen(compact_id) != 16) return ESP_ERR_INVALID_ARG;
-
-    char tx[9];
-    char nonce[9];
-    snprintf(tx, sizeof(tx), "%08lx", (unsigned long)esp_random());
-    snprintf(nonce, sizeof(nonce), "%08lx", (unsigned long)esp_random());
-
-    char canonical[80];
-    int canonical_len = snprintf(canonical, sizeof(canonical), "%u|%s|%" PRIu64 "|%s|%s",
-                                 HELLO_PROTOCOL_VERSION, compact_id, counter, nonce, tx);
+    char canonical[96];
+    int canonical_len = snprintf(canonical, sizeof(canonical), "H|%s|%" PRIu64, device_id, counter);
     if (canonical_len <= 0 || (size_t)canonical_len >= sizeof(canonical)) return ESP_ERR_INVALID_SIZE;
 
-    uint8_t signature_der[DEVICE_CREDENTIAL_SIGNATURE_MAX_DER];
-    size_t signature_der_len = 0;
-    ESP_RETURN_ON_ERROR(device_credentials_sign((const uint8_t *)canonical, (size_t)canonical_len,
-                                                 signature_der, sizeof(signature_der),
-                                                 &signature_der_len),
-                        TAG, "HELLO signing failed");
+    uint8_t signature_raw[DEVICE_CREDENTIAL_SIGNATURE_RAW_LEN];
+    ESP_RETURN_ON_ERROR(
+        device_credentials_sign_raw64((const uint8_t *)canonical, (size_t)canonical_len, signature_raw),
+        TAG,
+        "HELLO signing failed");
 
     char signature_b64[HELLO_SIGNATURE_B64_MAX];
-    ESP_RETURN_ON_ERROR(base64url_encode(signature_der, signature_der_len,
-                                         signature_b64, sizeof(signature_b64)),
-                        TAG, "HELLO signature encoding failed");
-    const unsigned sig_parts = fragment_count(strlen(signature_b64));
+    ESP_RETURN_ON_ERROR(
+        base64url_encode(signature_raw, sizeof(signature_raw), signature_b64, sizeof(signature_b64)),
+        TAG,
+        "HELLO signature encoding failed");
 
-    char start[ZIGBEE_OTA_HELLO_FRAME_MAX + 1];
-    int start_len = snprintf(start, sizeof(start), "H|%u|%s|%s|%" PRIu64 "|%s|%u",
-                             HELLO_PROTOCOL_VERSION, tx, compact_id, counter, nonce, sig_parts);
-    if (start_len <= 0 || start_len > ZIGBEE_OTA_HELLO_FRAME_MAX) return ESP_ERR_INVALID_SIZE;
+    char payload[ZIGBEE_OTA_HELLO_FRAME_MAX + 1];
+    int payload_len = snprintf(payload, sizeof(payload), "H|%" PRIu64 "|%s", counter, signature_b64);
+    if (payload_len <= 0 || payload_len > ZIGBEE_OTA_HELLO_FRAME_MAX) return ESP_ERR_INVALID_SIZE;
 
     ESP_LOGI(TAG,
-             "HELLO signed start device_id=%s tx=%s counter=%" PRIu64 " nonce=%s signature_der=%u parts=%u",
-             device_id, tx, counter, nonce, (unsigned)signature_der_len, sig_parts);
+             "HELLO single-frame device_id=%s counter=%" PRIu64 " signed_bytes=%u frame_bytes=%u",
+             device_id,
+             counter,
+             (unsigned)canonical_len,
+             (unsigned)payload_len);
 
-    esp_err_t err = zigbee_ota_report_payload(start);
-    ESP_LOGI(TAG, "HELLO start tx=%s send=%s(0x%x)", tx, esp_err_to_name(err), err);
-    ESP_RETURN_ON_ERROR(err, TAG, "HELLO start send failed");
-    vTaskDelay(pdMS_TO_TICKS(120));
-    ESP_RETURN_ON_ERROR(send_signature_fragments(tx, signature_b64, sig_parts), TAG, "HELLO signature send failed");
-
-    ESP_LOGI(TAG, "HELLO signed complete device_id=%s tx=%s", device_id, tx);
-    return ESP_OK;
+    esp_err_t err = zigbee_ota_report_payload(payload);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "HELLO single-frame send complete device_id=%s counter=%" PRIu64,
+                 device_id, counter);
+    }
+    return err;
 }
 
 static void zigbee_ota_hello_task(void *arg)
@@ -218,13 +166,13 @@ static void zigbee_ota_hello_task(void *arg)
         }
 
         ESP_LOGI(TAG,
-                 "HELLO network ready attempt=%u channel=%u short=0x%04x; sending after startup-report quiet period",
+                 "HELLO network ready attempt=%u channel=%u short=0x%04x",
                  attempt,
                  esp_zb_get_current_channel(),
                  esp_zb_get_short_address());
         esp_err_t err = send_secure_hello(device_id);
         if (err == ESP_OK) break;
-        ESP_LOGW(TAG, "HELLO signed send failed attempt=%u: %s", attempt, esp_err_to_name(err));
+        ESP_LOGW(TAG, "HELLO send failed attempt=%u: %s", attempt, esp_err_to_name(err));
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
     s_hello_task_started = false;
