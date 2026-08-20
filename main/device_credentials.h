@@ -27,6 +27,11 @@ esp_err_t device_credentials_sign_raw64(const uint8_t *data, size_t data_len,
 /* Verify the embedded OTA server certificate against the embedded root CA. */
 esp_err_t device_credentials_verify_ota_server_certificate(void);
 
+/* Verify raw r||s P-256 signature with the CA-verified OTA server certificate. */
+esp_err_t device_credentials_verify_ota_signature_raw64(
+    const uint8_t *data, size_t data_len,
+    const uint8_t signature[DEVICE_CREDENTIAL_SIGNATURE_RAW_LEN]);
+
 /*
  * Derive the P-256 ECDH shared secret using this device private key and the
  * public key from the CA-verified embedded OTA server certificate.
