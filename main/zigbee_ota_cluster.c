@@ -7,6 +7,7 @@
 
 #include "device_credentials.h"
 #include "device_identity.h"
+#include "device_enrollment.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_zigbee_core.h"
@@ -29,6 +30,8 @@ static const char *TAG = "zigbee_ota_cluster";
 #define DIAG_LEN_MIN 6
 #define DIAG_LEN_MAX 100
 #define DIAG_REPEAT_MS 20000
+#define OTA_MESSAGE_ID_HEX_LEN 16
+#define OTA_CHALLENGE_B64URL_LEN 43
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
@@ -37,12 +40,27 @@ static bool s_diag_task_started;
 static bool s_len_test_task_started;
 static uint32_t s_hello_delay_ms;
 static volatile size_t s_len_test_payload_len;
+static char s_pending_message_id[OTA_MESSAGE_ID_HEX_LEN + 1];
+static uint8_t s_pending_challenge[DEVICE_AUTH_CHALLENGE_LEN];
+static bool s_pending_challenge_valid;
 
 static bool zigbee_ota_network_identity_valid(void)
 {
     if (esp_zb_bdb_is_factory_new()) return false;
     const uint16_t short_addr = esp_zb_get_short_address();
     return short_addr != 0x0000 && short_addr != 0xfffe && short_addr != 0xffff;
+}
+
+static bool is_hex_string(const char *value, size_t len)
+{
+    if (value == NULL) return false;
+    for (size_t i = 0; i < len; ++i) {
+        const char c = value[i];
+        if (!((c >= '0' && c <= '9') ||
+              (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F'))) return false;
+    }
+    return true;
 }
 
 static esp_err_t base64url_encode(const uint8_t *input, size_t input_len, char *out, size_t out_size)
@@ -57,6 +75,38 @@ static esp_err_t base64url_encode(const uint8_t *input, size_t input_len, char *
     }
     while (written > 0 && out[written - 1] == '=') --written;
     out[written] = '\0';
+    return ESP_OK;
+}
+
+static esp_err_t base64url_decode_challenge(const char *input,
+                                            uint8_t out[DEVICE_AUTH_CHALLENGE_LEN])
+{
+    if (input == NULL || out == NULL || strlen(input) != OTA_CHALLENGE_B64URL_LEN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char padded[48];
+    const size_t input_len = strlen(input);
+    memcpy(padded, input, input_len);
+    size_t padded_len = input_len;
+    for (size_t i = 0; i < input_len; ++i) {
+        if (padded[i] == '-') padded[i] = '+';
+        else if (padded[i] == '_') padded[i] = '/';
+    }
+    while ((padded_len % 4) != 0) padded[padded_len++] = '=';
+    padded[padded_len] = '\0';
+
+    size_t written = 0;
+    const int ret = mbedtls_base64_decode(out,
+                                          DEVICE_AUTH_CHALLENGE_LEN,
+                                          &written,
+                                          (const unsigned char *)padded,
+                                          padded_len);
+    memset(padded, 0, sizeof(padded));
+    if (ret != 0 || written != DEVICE_AUTH_CHALLENGE_LEN) {
+        memset(out, 0, DEVICE_AUTH_CHALLENGE_LEN);
+        return ESP_ERR_INVALID_SIZE;
+    }
     return ESP_OK;
 }
 
@@ -97,6 +147,77 @@ static esp_err_t zigbee_ota_send_command_payload(const char *payload)
     return ESP_OK;
 }
 
+static void zigbee_ota_ack_task(void *arg)
+{
+    char *message_id = (char *)arg;
+    if (message_id != NULL) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        char ack[32];
+        snprintf(ack, sizeof(ack), "R|%s|OK", message_id);
+        const esp_err_t err = zigbee_ota_send_command_payload(ack);
+        ESP_LOGI(TAG, "DEVICE_AUTH_CHALLENGE application ACK message_id=%s result=%s",
+                 message_id, esp_err_to_name(err));
+        free(message_id);
+    }
+    vTaskDelete(NULL);
+}
+
+static void schedule_challenge_ack(const char *message_id)
+{
+    char *copy = strdup(message_id);
+    if (copy == NULL) {
+        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE ACK allocation failed");
+        return;
+    }
+    if (xTaskCreate(zigbee_ota_ack_task, "zb_ota_ack", 3072, copy, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE ACK task create failed");
+        free(copy);
+    }
+}
+
+static bool process_auth_challenge(const char *payload)
+{
+    if (payload == NULL || strncmp(payload, "A|", 2) != 0) return false;
+
+    const char *message_id = payload + 2;
+    const char *separator = strchr(message_id, '|');
+    if (separator == NULL || (size_t)(separator - message_id) != OTA_MESSAGE_ID_HEX_LEN ||
+        !is_hex_string(message_id, OTA_MESSAGE_ID_HEX_LEN)) {
+        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE rejected: invalid message_id");
+        return true;
+    }
+
+    const char *challenge_b64 = separator + 1;
+    if (strlen(challenge_b64) != OTA_CHALLENGE_B64URL_LEN) {
+        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE rejected: invalid compact challenge length=%u expected=%u",
+                 (unsigned)strlen(challenge_b64), OTA_CHALLENGE_B64URL_LEN);
+        return true;
+    }
+
+    uint8_t challenge[DEVICE_AUTH_CHALLENGE_LEN];
+    const esp_err_t decode_err = base64url_decode_challenge(challenge_b64, challenge);
+    if (decode_err != ESP_OK) {
+        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE rejected: base64url decode failed=%s",
+                 esp_err_to_name(decode_err));
+        return true;
+    }
+
+    memcpy(s_pending_message_id, message_id, OTA_MESSAGE_ID_HEX_LEN);
+    s_pending_message_id[OTA_MESSAGE_ID_HEX_LEN] = '\0';
+    memcpy(s_pending_challenge, challenge, sizeof(s_pending_challenge));
+    s_pending_challenge_valid = true;
+    memset(challenge, 0, sizeof(challenge));
+
+    ESP_LOGI(TAG,
+             "DEVICE_AUTH_CHALLENGE received endpoint=%u message_id=%s wire_bytes=%u challenge_bytes=%u stored=true",
+             ZIGBEE_OTA_ENDPOINT,
+             s_pending_message_id,
+             (unsigned)strlen(payload),
+             DEVICE_AUTH_CHALLENGE_LEN);
+    schedule_challenge_ack(s_pending_message_id);
+    return true;
+}
+
 static void zigbee_ota_diag_task(void *arg)
 {
     (void)arg;
@@ -134,6 +255,8 @@ static void zigbee_ota_len_test_task(void *arg)
 static bool zigbee_ota_process_payload(const char *payload, size_t payload_len)
 {
     if (payload == NULL || payload_len == 0) return true;
+
+    if (process_auth_challenge(payload)) return true;
 
     if (strcmp(payload, DIAG_PING) == 0) {
         if (!s_diag_task_started) {
@@ -265,6 +388,7 @@ bool zigbee_ota_cluster_handle_set_attr(const esp_zb_zcl_set_attr_value_message_
     char payload[OTA_CONFIG_MAX_PAYLOAD_LEN + 1];
     memcpy(payload, &zcl[1], len);
     payload[len] = '\0';
+    ESP_LOGI(TAG, "OTA attribute rx endpoint=%u bytes=%u type=%c", ZIGBEE_OTA_ENDPOINT, (unsigned)len, payload[0]);
     return zigbee_ota_process_payload(payload, len);
 }
 
