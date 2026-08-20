@@ -18,13 +18,6 @@ const OTA_CMD_FROM_DEVICE = 'otaFromDevice';
 const OTA_CMD_TO_DEVICE_ID = 0x04;
 const OTA_CMD_FROM_DEVICE_ID = 0x11;
 
-/*
- * Application endpoint layout:
- *   1..7 = Button 1..7
- *   8    = Light
- *   9    = Enable RS232
- *   10   = OTA/provisioning only (custom cluster 0xfc00, not a HA control endpoint)
- */
 const ENDPOINTS = {
     button1: 1,
     button2: 2,
@@ -54,12 +47,10 @@ const clampNumber = (value, min, max) => {
 };
 
 const lightEndpoint = (entity, meta) => meta?.device?.getEndpoint(ENDPOINTS.light) ?? entity;
-
 const endpointNameFromStateKey = (key, entity, meta) => {
     if (typeof key === 'string' && key.startsWith('state_')) return key.slice('state_'.length);
     return meta?.endpoint_name ?? endpointNameById(entity.ID);
 };
-
 const endpointForName = (entity, meta, endpointName) => {
     const endpointId = ENDPOINTS[endpointName];
     return endpointId === undefined ? entity : meta?.device?.getEndpoint(endpointId) ?? entity;
@@ -67,9 +58,7 @@ const endpointForName = (entity, meta, endpointName) => {
 
 const validateOtaCommand = (value) => {
     if (typeof value !== 'string') throw new Error('OTA command must be a string');
-    if (value.length < 1 || value.length > OTA_COMMAND_MAX_LEN) {
-        throw new Error(`OTA command length must be 1-${OTA_COMMAND_MAX_LEN} characters`);
-    }
+    if (value.length < 1 || value.length > OTA_COMMAND_MAX_LEN) throw new Error(`OTA command length must be 1-${OTA_COMMAND_MAX_LEN} characters`);
     if (value === 'D|PING' || value === 'D|STOP' || OTA_DIAG_LEN_RE.test(value)) return;
     if (value.startsWith('A|')) {
         if (!OTA_AUTH_CHALLENGE_RE.test(value)) throw new Error('OTA auth challenge must be A|<16 hex message_id>|<64 hex challenge>');
@@ -92,9 +81,7 @@ const logOtaHello = (msg, meta, payload) => {
     const parts = payload.split('|');
     const counter = parts.length >= 2 ? parts[1] : '?';
     const ieee = msg?.device?.ieeeAddr ?? meta?.device?.ieeeAddr ?? 'unknown';
-    meta?.logger?.info?.(
-        `OTA HELLO received from ${ieee} endpoint=${msg?.endpoint?.ID ?? '?'} cluster=0x${OTA_CLUSTER_ID.toString(16)} bytes=${Buffer.byteLength(payload, 'utf8')} counter=${counter}`,
-    );
+    meta?.logger?.info?.(`OTA HELLO received from ${ieee} endpoint=${msg?.endpoint?.ID ?? '?'} cluster=0x${OTA_CLUSTER_ID.toString(16)} bytes=${Buffer.byteLength(payload, 'utf8')} counter=${counter}`);
 };
 
 const remoteFromOnOff = {
@@ -151,18 +138,12 @@ const remoteFromOtaCommand = {
     },
 };
 
-/*
- * ESP uplink uses APSDE-DATA.request with source endpoint 10 and cluster 0xfc00.
- * Destination endpoint on the coordinator is its own AF endpoint (normally 1),
- * which is independent of the ESP endpoint number. Herdsman exposes direct APS
- * payloads that are not valid ZCL as type 'raw'.
- */
 const remoteFromOtaRaw = {
     cluster: OTA_CLUSTER_NAME,
     type: ['raw'],
     convert: (model, msg, publish, options, meta) => {
         if (msg.endpoint.ID !== OTA_ENDPOINT) return;
-        const raw = msg.data?.data;
+        const raw = Buffer.isBuffer(msg.data) ? msg.data : msg.data?.data;
         if (raw === undefined || raw === null) return;
         const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
         if (bytes.length < 2) return;
@@ -184,11 +165,7 @@ const remoteFromOtaRaw = {
 };
 
 const remoteToOnOff = {
-    key: [
-        'state',
-        'state_button1','state_button2','state_button3','state_button4','state_button5','state_button6','state_button7',
-        'state_light','state_enable_rs232',
-    ],
+    key: ['state','state_button1','state_button2','state_button3','state_button4','state_button5','state_button6','state_button7','state_light','state_enable_rs232'],
     convertSet: async (entity, key, value, meta) => {
         const endpointName = endpointNameFromStateKey(key, entity, meta);
         const state = String(value).toUpperCase();
@@ -222,16 +199,7 @@ const remoteToOtaCommand = {
         validateOtaCommand(value);
         const endpoint = meta.device.getEndpoint(OTA_ENDPOINT);
         if (!endpoint) throw new Error(`OTA endpoint ${OTA_ENDPOINT} not found on device`);
-        await endpoint.command(
-            OTA_CLUSTER_NAME,
-            OTA_CMD_TO_DEVICE,
-            {payload: value},
-            {
-                disableResponse: true,
-                disableDefaultResponse: true,
-                manufacturerCode: OTA_MANUFACTURER_CODE,
-            },
-        );
+        await endpoint.command(OTA_CLUSTER_NAME, OTA_CMD_TO_DEVICE, {payload: value}, {disableResponse: true, disableDefaultResponse: true, manufacturerCode: OTA_MANUFACTURER_CODE});
         return {state: {}};
     },
 };
@@ -249,23 +217,9 @@ const definition = {
             name: OTA_CLUSTER_NAME,
             ID: OTA_CLUSTER_ID,
             manufacturerCode: OTA_MANUFACTURER_CODE,
-            attributes: {
-                [OTA_ATTR_NAME]: {name: OTA_ATTR_NAME, ID: OTA_CONFIG_ATTR_ID, type: Zcl.DataType.CHAR_STR, write: true},
-            },
-            commands: {
-                [OTA_CMD_TO_DEVICE]: {
-                    name: OTA_CMD_TO_DEVICE,
-                    ID: OTA_CMD_TO_DEVICE_ID,
-                    parameters: [{name: 'payload', type: Zcl.DataType.CHAR_STR}],
-                },
-            },
-            commandsResponse: {
-                [OTA_CMD_FROM_DEVICE]: {
-                    name: OTA_CMD_FROM_DEVICE,
-                    ID: OTA_CMD_FROM_DEVICE_ID,
-                    parameters: [{name: 'payload', type: Zcl.DataType.CHAR_STR}],
-                },
-            },
+            attributes: {[OTA_ATTR_NAME]: {name: OTA_ATTR_NAME, ID: OTA_CONFIG_ATTR_ID, type: Zcl.DataType.CHAR_STR, write: true}},
+            commands: {[OTA_CMD_TO_DEVICE]: {name: OTA_CMD_TO_DEVICE, ID: OTA_CMD_TO_DEVICE_ID, parameters: [{name: 'payload', type: Zcl.DataType.CHAR_STR}]}},
+            commandsResponse: {[OTA_CMD_FROM_DEVICE]: {name: OTA_CMD_FROM_DEVICE, ID: OTA_CMD_FROM_DEVICE_ID, parameters: [{name: 'payload', type: Zcl.DataType.CHAR_STR}]}},
         }),
     ],
     fromZigbee: [remoteFromOnOff, remoteFromBrightness, remoteFromColorTemperature, remoteFromOtaAttribute, remoteFromOtaCommand, remoteFromOtaRaw],
