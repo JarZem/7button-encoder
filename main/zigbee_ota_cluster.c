@@ -35,6 +35,8 @@ static const char *TAG = "zigbee_ota_cluster";
 #define DIAG_LEN_MIN 6
 #define DIAG_LEN_MAX 100
 #define DIAG_REPEAT_MS 20000
+#define APP_ACK_MAX_ATTEMPTS 40
+#define APP_ACK_RETRY_MS 250
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
@@ -44,18 +46,16 @@ static bool s_len_test_task_started;
 static uint32_t s_hello_delay_ms;
 static volatile size_t s_len_test_payload_len;
 
-/*
- * Exactly one APS application payload may be outstanding at a time.
- * The buffer must remain valid until APSDE-DATA.confirm arrives.
- * This is deliberate backpressure: if confirm never arrives we STOP sending
- * instead of filling ZBOSS/coordinator queues with more requests.
- */
+/* Exactly one APS request may be outstanding. Keep the buffer alive until confirm. */
 static volatile bool s_aps_tx_pending;
 static int64_t s_aps_tx_started_ms;
 static uint8_t s_aps_tx_payload[ZIGBEE_OTA_COMMAND_PAYLOAD_MAX + 1];
 static size_t s_aps_tx_payload_len;
 static uint32_t s_aps_tx_ok_count;
 static uint32_t s_aps_tx_fail_count;
+
+static bool s_app_ack_task_started;
+static char s_app_ack_payload[32];
 
 static bool zigbee_ota_network_identity_valid(void)
 {
@@ -81,30 +81,29 @@ static esp_err_t base64url_encode(const uint8_t *input, size_t input_len, char *
 
 static void zigbee_ota_aps_confirm_handler(esp_zb_apsde_data_confirm_t confirm)
 {
+    /* esp-zigbee 1.6.x confirm does not carry cluster_id; this module allows only one APS TX. */
     const bool ours = confirm.src_endpoint == ZIGBEE_OTA_ENDPOINT &&
                       confirm.dst_endpoint == APS_COORDINATOR_ENDPOINT &&
-                      confirm.cluster_id == ZIGBEE_OTA_CLUSTER_ID;
+                      confirm.dst_addr.addr_short == APS_COORDINATOR_SHORT_ADDR;
     if (!ours) return;
 
     const uint8_t status = confirm.status;
     if (status == 0x00) {
         ++s_aps_tx_ok_count;
         ESP_LOGI(TAG,
-                 "APS CONFIRM OK dst=0x%04x/%u cluster=0x%04x bytes=%u ok=%lu fail=%lu",
+                 "APS CONFIRM OK dst=0x%04x/%u bytes=%u ok=%lu fail=%lu",
                  confirm.dst_addr.addr_short,
                  confirm.dst_endpoint,
-                 confirm.cluster_id,
                  (unsigned)s_aps_tx_payload_len,
                  (unsigned long)s_aps_tx_ok_count,
                  (unsigned long)s_aps_tx_fail_count);
     } else {
         ++s_aps_tx_fail_count;
         ESP_LOGE(TAG,
-                 "APS CONFIRM FAIL status=0x%02x dst=0x%04x/%u cluster=0x%04x bytes=%u ok=%lu fail=%lu",
+                 "APS CONFIRM FAIL status=0x%02x dst=0x%04x/%u bytes=%u ok=%lu fail=%lu",
                  status,
                  confirm.dst_addr.addr_short,
                  confirm.dst_endpoint,
-                 confirm.cluster_id,
                  (unsigned)s_aps_tx_payload_len,
                  (unsigned long)s_aps_tx_ok_count,
                  (unsigned long)s_aps_tx_fail_count);
@@ -189,6 +188,45 @@ static esp_err_t zigbee_ota_send_aps_payload(const char *payload)
     return ESP_OK;
 }
 
+static void zigbee_ota_app_ack_task(void *arg)
+{
+    (void)arg;
+    for (unsigned attempt = 1; attempt <= APP_ACK_MAX_ATTEMPTS; ++attempt) {
+        if (!s_aps_tx_pending) {
+            const esp_err_t err = zigbee_ota_send_aps_payload(s_app_ack_payload);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "APP ACK queued attempt=%u payload=%s", attempt, s_app_ack_payload);
+                s_app_ack_task_started = false;
+                vTaskDelete(NULL);
+                return;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(APP_ACK_RETRY_MS));
+    }
+    ESP_LOGE(TAG, "APP ACK not queued after %u attempts payload=%s",
+             APP_ACK_MAX_ATTEMPTS, s_app_ack_payload);
+    s_app_ack_task_started = false;
+    vTaskDelete(NULL);
+}
+
+static void zigbee_ota_schedule_app_ack(const char *message_id, size_t message_id_len)
+{
+    if (message_id == NULL || message_id_len != 16) {
+        ESP_LOGW(TAG, "APP ACK not scheduled: invalid message_id length=%u", (unsigned)message_id_len);
+        return;
+    }
+    if (s_app_ack_task_started) {
+        ESP_LOGW(TAG, "APP ACK already pending; duplicate challenge will not create another task");
+        return;
+    }
+    snprintf(s_app_ack_payload, sizeof(s_app_ack_payload), "R|%.*s|OK", 16, message_id);
+    s_app_ack_task_started = true;
+    if (xTaskCreate(zigbee_ota_app_ack_task, "zb_ota_ack", 3072, NULL, 5, NULL) != pdPASS) {
+        s_app_ack_task_started = false;
+        ESP_LOGE(TAG, "APP ACK task create failed payload=%s", s_app_ack_payload);
+    }
+}
+
 static void zigbee_ota_diag_task(void *arg)
 {
     (void)arg;
@@ -265,9 +303,13 @@ static bool zigbee_ota_process_payload(const char *payload, size_t payload_len)
     }
 
     if (payload_len >= 3 && payload[0] == 'A' && payload[1] == '|') {
+        const char *message_id = payload + 2;
+        const char *separator = strchr(message_id, '|');
+        const size_t message_id_len = separator ? (size_t)(separator - message_id) : 0;
         s_auth_challenge_received = true;
-        ESP_LOGI(TAG, "DEVICE_AUTH_CHALLENGE received bytes=%u payload=%s",
-                 (unsigned)payload_len, payload);
+        ESP_LOGI(TAG, "DEVICE_AUTH_CHALLENGE received bytes=%u message_id_len=%u payload=%s",
+                 (unsigned)payload_len, (unsigned)message_id_len, payload);
+        zigbee_ota_schedule_app_ack(message_id, message_id_len);
         return true;
     }
 
@@ -375,10 +417,9 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
         ZIGBEE_OTA_MANUFACTURER_CODE, ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
         access, s_ota_payload_attr);
     if (err == ESP_OK) {
-        /* esp-zigbee 1.6.x APS callbacks are global. Register once during stack setup. */
         esp_zb_aps_data_confirm_handler_register(zigbee_ota_aps_confirm_handler);
         ESP_LOGW(TAG,
-                 "OTA transport registered: coordinator=0x0000 endpoint=1 cluster=0xfc00; uplink=APS ACK+fragmentation; max_payload=%u",
+                 "OTA transport registered: coordinator=0x0000 endpoint=1 cluster=0xfc00; uplink=APS ACK+fragmentation; one outstanding request; max_payload=%u",
                  ZIGBEE_OTA_COMMAND_PAYLOAD_MAX);
         zigbee_ota_schedule_hello(HELLO_START_DELAY_MS);
     }
