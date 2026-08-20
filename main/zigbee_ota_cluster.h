@@ -15,17 +15,17 @@ extern "C" {
 #define ZIGBEE_OTA_CONFIG_ATTR_ID                0x0001
 
 /*
- * Coordinator -> ESP uses command 0x04, already registered by zigbee_minimal.c
- * as the privileged DEVICE_AUTH_CHALLENGE command. ESP -> coordinator uses
- * raw APSDE-DATA.request now; 0x11 remains only for migration compatibility.
+ * OTA/provisioning is a separate application service on endpoint 10.
+ * Coordinator -> ESP uses command 0x04 (DEVICE_AUTH_CHALLENGE).
+ * ESP -> coordinator uses direct APS payloads; 0x11 remains migration-only.
  */
 #define ZIGBEE_OTA_CMD_TO_DEVICE_ID              0x04
 #define ZIGBEE_OTA_CMD_FROM_DEVICE_ID            0x11
-#define ZIGBEE_OTA_ENDPOINT                      1
+#define ZIGBEE_OTA_ENDPOINT                      10
 
 #define ZIGBEE_OTA_CMD_DEVICE_AUTH_CHALLENGE_ID  0x04
 #define ZIGBEE_OTA_CMD_DEVICE_ENROLL_ID          0x05
-#define ZIGBEE_OTA_CMD_COMMAND_ACK_ID             0x06
+#define ZIGBEE_OTA_CMD_COMMAND_ACK_ID            0x06
 
 /* Legacy attribute is kept only for backward compatibility during migration. */
 #define ZIGBEE_OTA_ZCL_STRING_CAPACITY           40
