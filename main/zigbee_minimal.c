@@ -1133,20 +1133,6 @@ static void zigbee_task(void *arg)
         ESP_ZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_COLOR_TEMPERATURE));
     ESP_LOGI(TAG, "privilege ColorControl MoveToColorTemperature command registered");
 
-    ESP_ERROR_CHECK(esp_zb_zcl_add_privilege_command(
-        ZIGBEE_OTA_ENDPOINT,
-        ZIGBEE_OTA_CLUSTER_ID,
-        ZIGBEE_OTA_CMD_DEVICE_AUTH_CHALLENGE_ID));
-    ESP_ERROR_CHECK(esp_zb_zcl_add_privilege_command(
-        ZIGBEE_OTA_ENDPOINT,
-        ZIGBEE_OTA_CLUSTER_ID,
-        ZIGBEE_OTA_CMD_DEVICE_ENROLL_ID));
-    ESP_ERROR_CHECK(esp_zb_zcl_add_privilege_command(
-        ZIGBEE_OTA_ENDPOINT,
-        ZIGBEE_OTA_CLUSTER_ID,
-        ZIGBEE_OTA_CMD_COMMAND_ACK_ID));
-    ESP_LOGI(TAG, "privilege OTA enrollment commands registered endpoint=%u cluster=0x%04x", ZIGBEE_OTA_ENDPOINT, ZIGBEE_OTA_CLUSTER_ID);
-
     esp_zb_core_action_handler_register(zb_action_handler);
     ESP_LOGI(TAG, "action handler registered incl. custom OTA cluster request callback");
 
