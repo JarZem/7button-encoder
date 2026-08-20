@@ -48,7 +48,10 @@ static const char *TAG = "zb_minimal";
 #define ZB_MIN_MODEL_TEXT        "RemoteControl7Encoder"
 #define ZB_MIN_SW_BUILD_TEXT     "1.0.0"
 #define ZB_MIN_REPORT_DELAY_MS   100
-#define ZB_LIGHT_ENDPOINT        9
+#define ZB_BUTTON7_ENDPOINT      7
+#define ZB_LIGHT_ENDPOINT        8
+#define ZB_RS232_ENDPOINT        9
+#define ZB_OTA_DEVICE_ID         0xff01
 #define ZB_BRIGHTNESS_MIN        0
 #define ZB_BRIGHTNESS_MAX        100
 #define ZB_BRIGHTNESS_DEFAULT    100
@@ -364,25 +367,19 @@ static const char *endpoint_label(uint8_t endpoint)
     if (endpoint_index < 0) {
         return "unknown";
     }
-    if (endpoint_index == 6) {
-        return "EnableRS232";
-    }
-    if (endpoint_index == 7) {
-        return "EnableOTA";
-    }
-    if (endpoint_index == 8) {
-        return "Light";
-    }
+    if (endpoint_index == 6) return "Button7";
+    if (endpoint_index == 7) return "Light";
+    if (endpoint_index == 8) return "EnableRS232";
 
-    static const char *const switch_names[ZB_SWITCH_COUNT] = {
-        "Switch1",
-        "Switch2",
-        "Switch3",
-        "Switch4",
-        "Switch5",
-        "Switch6",
+    static const char *const button_names[ZB_SWITCH_COUNT] = {
+        "Button1",
+        "Button2",
+        "Button3",
+        "Button4",
+        "Button5",
+        "Button6",
     };
-    return switch_names[endpoint_index];
+    return button_names[endpoint_index];
 }
 
 static void report_standard_attr(uint8_t endpoint, uint16_t cluster_id, uint16_t attr_id)
@@ -536,9 +533,10 @@ static void schedule_initial_on_off_reports(void)
     }
     schedule_level_report(ZB_MIN_REPORT_DELAY_MS + (100 * ZB_ENDPOINT_COUNT));
     schedule_color_temperature_report(ZB_MIN_REPORT_DELAY_MS + (100 * (ZB_ENDPOINT_COUNT + 1)));
-    ESP_LOGI(TAG, "scheduled initial OnOff reports endpoints=1..%u including Light endpoint=%u",
+    ESP_LOGI(TAG, "scheduled initial OnOff reports application endpoints=1..%u Light endpoint=%u OTA endpoint=%u excluded",
              ZB_ENDPOINT_COUNT,
-             ZB_LIGHT_ENDPOINT);
+             ZB_LIGHT_ENDPOINT,
+             ZIGBEE_OTA_ENDPOINT);
 }
 
 static esp_err_t verify_endpoint_clusters(esp_zb_ep_list_t *ep_list, uint8_t endpoint)
@@ -682,20 +680,28 @@ static esp_err_t add_light_control_clusters(esp_zb_ep_list_t *ep_list)
 
 static esp_err_t add_ota_command_cluster(esp_zb_ep_list_t *ep_list)
 {
-    esp_zb_cluster_list_t *cluster_list = esp_zb_ep_list_get_ep(ep_list, ZB_FIRST_SWITCH_ENDPOINT);
-    ESP_RETURN_ON_FALSE(cluster_list != NULL,
-                        ESP_ERR_INVALID_ARG,
-                        TAG,
-                        "OTA endpoint %u not found",
-                        ZB_FIRST_SWITCH_ENDPOINT);
+    esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
+    ESP_RETURN_ON_FALSE(cluster_list != NULL, ESP_ERR_NO_MEM, TAG, "failed to create OTA endpoint cluster list");
+
+    esp_zb_basic_cluster_cfg_t basic_cfg = {
+        .zcl_version = ESP_ZB_ZCL_BASIC_ZCL_VERSION_DEFAULT_VALUE,
+        .power_source = ESP_ZB_ZCL_BASIC_POWER_SOURCE_DC_SOURCE,
+    };
+    esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(&basic_cfg);
+    ESP_RETURN_ON_FALSE(basic_cluster != NULL, ESP_ERR_NO_MEM, TAG, "failed to create OTA Basic cluster");
+    esp_err_t ret = esp_zb_cluster_list_add_basic_cluster(
+        cluster_list,
+        basic_cluster,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    ESP_RETURN_ON_ERROR(ret, TAG, "failed to add Basic cluster to OTA endpoint");
 
     esp_zb_attribute_list_t *ota_cluster = esp_zb_zcl_attr_list_create(ZIGBEE_OTA_CLUSTER_ID);
     ESP_RETURN_ON_FALSE(ota_cluster != NULL, ESP_ERR_NO_MEM, TAG, "failed to create OTA custom cluster");
 
-    esp_err_t ret = zigbee_ota_cluster_add_attrs(ota_cluster);
+    ret = zigbee_ota_cluster_add_attrs(ota_cluster);
     ESP_LOGI(TAG,
              "add OTA custom attr endpoint=%u cluster=0x%04x attr=0x%04x ret=%s(0x%x)",
-             ZB_FIRST_SWITCH_ENDPOINT,
+             ZIGBEE_OTA_ENDPOINT,
              ZIGBEE_OTA_CLUSTER_ID,
              ZIGBEE_OTA_CONFIG_ATTR_ID,
              esp_err_to_name(ret),
@@ -706,9 +712,20 @@ static esp_err_t add_ota_command_cluster(esp_zb_ep_list_t *ep_list)
         cluster_list,
         ota_cluster,
         ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    ESP_RETURN_ON_ERROR(ret, TAG, "failed to add OTA custom cluster");
+
+    const esp_zb_endpoint_config_t endpoint_config = {
+        .endpoint = ZIGBEE_OTA_ENDPOINT,
+        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .app_device_id = ZB_OTA_DEVICE_ID,
+        .app_device_version = 0,
+    };
+    ret = esp_zb_ep_list_add_ep(ep_list, cluster_list, endpoint_config);
     ESP_LOGI(TAG,
-             "add OTA custom cluster endpoint=%u cluster=0x%04x ret=%s(0x%x)",
-             ZB_FIRST_SWITCH_ENDPOINT,
+             "add dedicated OTA endpoint=%u profile=0x%04x device=0x%04x cluster=0x%04x ret=%s(0x%x)",
+             ZIGBEE_OTA_ENDPOINT,
+             endpoint_config.app_profile_id,
+             endpoint_config.app_device_id,
              ZIGBEE_OTA_CLUSTER_ID,
              esp_err_to_name(ret),
              ret);
@@ -908,7 +925,7 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
                  message->info.dst_endpoint,
                  endpoint_label(message->info.dst_endpoint),
                  on ? "ON" : "OFF");
-        ESP_LOGI(TAG, "minimal states: switch1=%s switch2=%s switch3=%s switch4=%s switch5=%s switch6=%s EnableRS232=%s EnableOTA=%s Light=%s Brightness=%u%% WhiteTemperature=%uK",
+        ESP_LOGI(TAG, "minimal states: button1=%s button2=%s button3=%s button4=%s button5=%s button6=%s button7=%s Light=%s EnableRS232=%s Brightness=%u%% WhiteTemperature=%uK",
                  s_endpoint_on[0] ? "ON" : "OFF",
                  s_endpoint_on[1] ? "ON" : "OFF",
                  s_endpoint_on[2] ? "ON" : "OFF",
@@ -924,12 +941,10 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
             publish_input_event(INPUT_EVENT_ZIGBEE_SWITCH_SET,
                                 (uint8_t)(endpoint_index + 1),
                                 on ? 1 : 0);
-        } else if (endpoint_index == 6) {
-            publish_input_event(INPUT_EVENT_ZIGBEE_RS232_SET, 0, on ? 1 : 0);
-        } else if (endpoint_index == 7) {
-            publish_input_event(INPUT_EVENT_ZIGBEE_OTA_SET, 0, on ? 1 : 0);
-        } else if (endpoint_index == 8) {
+        } else if (endpoint_index == 6 || endpoint_index == 7) {
             publish_input_event(INPUT_EVENT_ZIGBEE_LIGHT_ONOFF_SET, 0, on ? 1 : 0);
+        } else if (endpoint_index == 8) {
+            publish_input_event(INPUT_EVENT_ZIGBEE_RS232_SET, 0, on ? 1 : 0);
         }
     } else if (message->info.dst_endpoint == ZB_LIGHT_ENDPOINT &&
                message->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL &&
@@ -1070,13 +1085,9 @@ static void zigbee_task(void *arg)
     (void)arg;
 
     ESP_LOGI(TAG, "ESP Zigbee SDK: %s", esp_zb_get_version_string());
-    ESP_LOGI(TAG, "minimal descriptor: endpoints=1..%u profile=0x%04x device=HA On/Off Light(0x0100) endpoints 1-6 switches 7 EnableRS232 8 EnableOTA 9 Light default=OFF Brightness=%u%% WhiteTemperature=%uK range=%u..%uK",
-             ZB_ENDPOINT_COUNT,
-             ESP_ZB_AF_HA_PROFILE_ID,
-             s_brightness_percent,
-             s_white_temperature_kelvin,
-             ZB_WHITE_TEMP_MIN_K,
-             ZB_WHITE_TEMP_MAX_K);
+    ESP_LOGI(TAG, "descriptor: ep1-7 Buttons, ep8 Light, ep9 EnableRS232, ep10 OTA/provisioning custom cluster=0x%04x profile=0x%04x",
+             ZIGBEE_OTA_CLUSTER_ID,
+             ESP_ZB_AF_HA_PROFILE_ID);
     load_fast_pair_channel();
 
     ESP_LOGI(TAG, "ZED config: install_code=%d keep_alive_ms=%u aging_timeout=%u fast_channel=%u fallback_mask=0x%08lx",
@@ -1100,7 +1111,7 @@ static void zigbee_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "standard On/Off Light endpoint created endpoint=%u default=OFF", ZB_FIRST_SWITCH_ENDPOINT);
+    ESP_LOGI(TAG, "standard On/Off endpoint created endpoint=%u default=OFF", ZB_FIRST_SWITCH_ENDPOINT);
 
     for (uint8_t i = 1; i < ZB_ENDPOINT_COUNT; ++i) {
         ESP_ERROR_CHECK(add_standard_on_off_endpoint(ep_list, s_switch_endpoints[i]));
@@ -1111,7 +1122,8 @@ static void zigbee_task(void *arg)
         ESP_ERROR_CHECK(verify_endpoint_clusters(ep_list, s_switch_endpoints[i]));
         ESP_ERROR_CHECK(add_basic_identity(ep_list, s_switch_endpoints[i]));
     }
-    ESP_LOGI(TAG, "registered endpoint count=%u", ZB_ENDPOINT_COUNT);
+    ESP_ERROR_CHECK(add_basic_identity(ep_list, ZIGBEE_OTA_ENDPOINT));
+    ESP_LOGI(TAG, "registered application endpoints=%u plus dedicated OTA endpoint=%u", ZB_ENDPOINT_COUNT, ZIGBEE_OTA_ENDPOINT);
     ESP_ERROR_CHECK(esp_zb_device_register(ep_list));
     ESP_LOGI(TAG, "esp_zb_device_register done");
 
@@ -1133,7 +1145,7 @@ static void zigbee_task(void *arg)
         ZIGBEE_OTA_ENDPOINT,
         ZIGBEE_OTA_CLUSTER_ID,
         ZIGBEE_OTA_CMD_COMMAND_ACK_ID));
-    ESP_LOGI(TAG, "privilege OTA enrollment commands registered");
+    ESP_LOGI(TAG, "privilege OTA enrollment commands registered endpoint=%u cluster=0x%04x", ZIGBEE_OTA_ENDPOINT, ZIGBEE_OTA_CLUSTER_ID);
 
     esp_zb_core_action_handler_register(zb_action_handler);
     ESP_LOGI(TAG, "action handler registered incl. custom OTA cluster request callback");
@@ -1155,13 +1167,15 @@ void zigbee_minimal_apply_state(const device_state_t *state, bool ota_enabled, b
     if (state == NULL) {
         return;
     }
+    (void)ota_enabled;
 
     for (uint8_t i = 0; i < ZB_SWITCH_COUNT; ++i) {
         s_endpoint_on[i] = (state->switches & (1U << i)) != 0;
     }
-    s_endpoint_on[6] = state->rs232_enabled;
-    s_endpoint_on[7] = ota_enabled;
-    s_endpoint_on[8] = (state->switches & ((1U << ZB_SWITCH_COUNT) - 1U)) != 0;
+    const bool any_button_on = (state->switches & ((1U << ZB_SWITCH_COUNT) - 1U)) != 0;
+    s_endpoint_on[6] = any_button_on;       /* Button7 central state: any of 1..6 active. */
+    s_endpoint_on[7] = any_button_on;       /* Light state follows aggregate outputs. */
+    s_endpoint_on[8] = state->rs232_enabled;
 
     s_brightness_percent = state->brightness > ZB_BRIGHTNESS_MAX ? ZB_BRIGHTNESS_MAX : state->brightness;
     s_white_temperature_kelvin = state->white_temperature;
@@ -1176,7 +1190,7 @@ void zigbee_minimal_apply_state(const device_state_t *state, bool ota_enabled, b
     s_color_temperature_startup_mired = s_color_temperature_mired;
 
     ESP_LOGI(TAG,
-             "apply app state report=%s switches=0x%02x EnableRS232=%s EnableOTA=%s Light=%s Brightness=%u%% level=%u WhiteTemperature=%uK mired=%u",
+             "apply app state report=%s switches=0x%02x Button7=%s Light=%s EnableRS232=%s Brightness=%u%% level=%u WhiteTemperature=%uK mired=%u",
              report ? "true" : "false",
              state->switches & ((1U << ZB_SWITCH_COUNT) - 1U),
              s_endpoint_on[6] ? "ON" : "OFF",
