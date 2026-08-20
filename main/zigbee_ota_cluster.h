@@ -14,12 +14,15 @@ extern "C" {
 #define ZIGBEE_OTA_MANUFACTURER_CODE             0x1234
 #define ZIGBEE_OTA_CONFIG_ATTR_ID                0x0001
 
-/* Custom ZCL command transport. 0x10 = coordinator -> ESP, 0x11 = ESP -> coordinator. */
-#define ZIGBEE_OTA_CMD_TO_DEVICE_ID              0x10
+/*
+ * Coordinator -> ESP uses command 0x04, already registered by zigbee_minimal.c
+ * as the privileged DEVICE_AUTH_CHALLENGE command. ESP -> coordinator uses
+ * raw APSDE-DATA.request now; 0x11 remains only for migration compatibility.
+ */
+#define ZIGBEE_OTA_CMD_TO_DEVICE_ID              0x04
 #define ZIGBEE_OTA_CMD_FROM_DEVICE_ID            0x11
 #define ZIGBEE_OTA_ENDPOINT                      1
 
-/* Legacy command IDs are still registered by zigbee_minimal.c during migration. */
 #define ZIGBEE_OTA_CMD_DEVICE_AUTH_CHALLENGE_ID  0x04
 #define ZIGBEE_OTA_CMD_DEVICE_ENROLL_ID          0x05
 #define ZIGBEE_OTA_CMD_COMMAND_ACK_ID             0x06
@@ -27,7 +30,7 @@ extern "C" {
 /* Legacy attribute is kept only for backward compatibility during migration. */
 #define ZIGBEE_OTA_ZCL_STRING_CAPACITY           40
 
-/* Current application message ceiling for the command transport tests. */
+/* APS application payload ceiling; 100-byte diagnostics are intentionally supported. */
 #define ZIGBEE_OTA_COMMAND_PAYLOAD_MAX            120
 #define ZIGBEE_OTA_HELLO_FRAME_MAX                112
 
