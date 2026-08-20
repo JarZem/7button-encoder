@@ -131,10 +131,12 @@ const remoteFromOtaCommand = {
 };
 
 /*
- * Herdsman currently exposes our manufacturer-specific custom command as raw.
- * Observed wire layout:
- *   [frameControl, transactionSequence, commandId, charStringLength, ...payload]
- * Example: [9,26,17,60,68,124,...] = cmd 0x11, 60-byte "D|L060|...".
+ * ESP uplink now uses APSDE-DATA.request directly with:
+ *   ACK_TX | FRAG_PERMITTED, dst short 0x0000, dst endpoint 1,
+ *   profile 0x0104, cluster 0xfc00.
+ * Herdsman exposes an APS payload which is not valid ZCL as type 'raw'.
+ * New format is therefore the application bytes directly (H|..., D|..., R|...).
+ * Legacy custom-ZCL raw frames are still decoded during migration.
  */
 const remoteFromOtaRaw = {
     cluster: OTA_CLUSTER_NAME,
@@ -142,18 +144,19 @@ const remoteFromOtaRaw = {
     convert: (model, msg) => {
         const raw = msg.data?.data;
         if (raw === undefined || raw === null) return;
-
         const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-        if (bytes.length < 4) return;
+        if (bytes.length < 2) return;
 
-        const commandId = bytes[2];
-        if (commandId !== OTA_CMD_FROM_DEVICE_ID) return;
+        const direct = bytes.toString('utf8');
+        if (/^(H|D|R)\|/.test(direct)) {
+            return {action: direct};
+        }
 
-        const declaredLength = bytes[3];
-        if (declaredLength < 1 || bytes.length < 4 + declaredLength) return;
-
-        const payload = bytes.subarray(4, 4 + declaredLength).toString('utf8');
-        return {action: payload};
+        if (bytes.length >= 4 && bytes[2] === OTA_CMD_FROM_DEVICE_ID) {
+            const declaredLength = bytes[3];
+            if (declaredLength < 1 || bytes.length < 4 + declaredLength) return;
+            return {action: bytes.subarray(4, 4 + declaredLength).toString('utf8')};
+        }
     },
 };
 
@@ -186,12 +189,27 @@ const remoteToColorTemperature = {
     convertGet: async (entity, key, meta) => { await lightEndpoint(entity, meta).read('lightingColorCtrl', ['colorTemperature', 'colorMode']); },
 };
 
+/*
+ * Downlink stays a SINGLE custom ZCL command (no application chunking).
+ * disableResponse/disableDefaultResponse are intentional: herdsman still waits
+ * for the Z-Stack AF dataConfirm, but it does not keep a second ZCL waiter alive.
+ * End-to-end application confirmation is R|<message_id>|OK from ESP via APS.
+ */
 const remoteToOtaCommand = {
     key: ['ota_command'],
     convertSet: async (entity, key, value, meta) => {
         validateOtaCommand(value);
         const endpoint = meta.device.getEndpoint(ENDPOINTS.switch1) ?? entity;
-        await endpoint.write(OTA_CLUSTER_NAME, {[OTA_ATTR_NAME]: value}, {disableDefaultResponse: false, manufacturerCode: OTA_MANUFACTURER_CODE});
+        await endpoint.command(
+            OTA_CLUSTER_NAME,
+            OTA_CMD_TO_DEVICE,
+            {payload: value},
+            {
+                disableResponse: true,
+                disableDefaultResponse: true,
+                manufacturerCode: OTA_MANUFACTURER_CODE,
+            },
+        );
         return {state: {}};
     },
 };
