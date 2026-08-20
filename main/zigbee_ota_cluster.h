@@ -13,28 +13,21 @@ extern "C" {
 #define ZIGBEE_OTA_CLUSTER_ID                    0xfc00
 #define ZIGBEE_OTA_MANUFACTURER_CODE             0x1234
 #define ZIGBEE_OTA_CONFIG_ATTR_ID                0x0001
+#define ZIGBEE_OTA_ENDPOINT                      10
 
 /*
- * OTA/provisioning is a separate application service on endpoint 10.
- * Coordinator -> ESP uses the manufacturer-specific writable CHAR_STRING
- * attribute 0x0001. MQTT keeps the 32-byte challenge as 64 hex characters,
- * while the Zigbee converter compacts it to 43-char base64url before radio TX.
- * ESP decodes it back to the original 32 bytes and replies R|message_id|OK.
- * ESP -> coordinator uses custom command 0x11.
+ * Dedicated OTA/provisioning service on endpoint 10, cluster 0xFC00.
+ * Coordinator -> ESP: manufacturer-specific writable CHAR_STRING attr 0x0001.
+ * ESP -> coordinator: custom command 0x11.
+ * Secure protocol: H|counter|sig, A|random|sig, R|sig, P|AES-GCM.
+ * Diagnostic tool: D|PING -> D|PONG, plus D|LEN|N / D|STOP.
  */
 #define ZIGBEE_OTA_CMD_TO_DEVICE_ID              0x04
 #define ZIGBEE_OTA_CMD_FROM_DEVICE_ID            0x11
-#define ZIGBEE_OTA_ENDPOINT                      10
 
-#define ZIGBEE_OTA_CMD_DEVICE_AUTH_CHALLENGE_ID  0x04
-#define ZIGBEE_OTA_CMD_DEVICE_ENROLL_ID          0x05
-#define ZIGBEE_OTA_CMD_COMMAND_ACK_ID            0x06
-
-/* Compact A|<16 hex message_id>|<43 base64url challenge> is 62 bytes. */
 #define ZIGBEE_OTA_ZCL_STRING_CAPACITY           120
-
-#define ZIGBEE_OTA_COMMAND_PAYLOAD_MAX            120
-#define ZIGBEE_OTA_HELLO_FRAME_MAX                112
+#define ZIGBEE_OTA_COMMAND_PAYLOAD_MAX           100
+#define ZIGBEE_OTA_HELLO_FRAME_MAX               100
 
 esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster);
 void zigbee_ota_schedule_hello(uint32_t delay_ms);
