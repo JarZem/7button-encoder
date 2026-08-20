@@ -23,7 +23,6 @@ static const char *TAG = "zigbee_ota_cluster";
 #define HELLO_WAIT_ATTEMPTS 30
 #define HELLO_SIGNATURE_B64_MAX 96
 #define HELLO_START_DELAY_MS 5000
-#define HELLO_RETRY_MS 20000
 #define APS_CONFIRM_STUCK_MS 30000
 #define APS_COORDINATOR_SHORT_ADDR 0x0000
 #define APS_COORDINATOR_ENDPOINT 1
@@ -100,7 +99,7 @@ static void zigbee_ota_aps_confirm_handler(esp_zb_apsde_data_confirm_t confirm)
     } else {
         ++s_aps_tx_fail_count;
         ESP_LOGE(TAG,
-                 "APS CONFIRM FAIL status=0x%02x dst=0x%04x/%u bytes=%u ok=%lu fail=%lu",
+                 "APS CONFIRM FAIL status=0x%02x dst=0x%04x/%u bytes=%u ok=%lu fail=%lu; no automatic retry",
                  status,
                  confirm.dst_addr.addr_short,
                  confirm.dst_endpoint,
@@ -155,7 +154,8 @@ static esp_err_t zigbee_ota_send_aps_payload(const char *payload)
     req.asdu_length = payload_len;
     req.asdu = s_aps_tx_payload;
     req.radius = APS_RADIUS;
-    req.tx_options = ESP_ZB_APSDE_TX_OPT_ACK_TX | ESP_ZB_APSDE_TX_OPT_FRAG_PERMITTED;
+    /* 92/100-byte transport test: request APS ACK only. Do not request fragmentation. */
+    req.tx_options = ESP_ZB_APSDE_TX_OPT_ACK_TX;
     req.use_alias = false;
 
     s_aps_tx_pending = true;
@@ -179,7 +179,7 @@ static esp_err_t zigbee_ota_send_aps_payload(const char *payload)
     }
 
     ESP_LOGI(TAG,
-             "APS REQUEST queued dst=0x%04x/%u cluster=0x%04x bytes=%u options=ACK_TX|FRAG_PERMITTED payload=%s",
+             "APS REQUEST queued dst=0x%04x/%u cluster=0x%04x bytes=%u options=ACK_TX payload=%s",
              APS_COORDINATOR_SHORT_ADDR,
              APS_COORDINATOR_ENDPOINT,
              ZIGBEE_OTA_CLUSTER_ID,
@@ -250,7 +250,7 @@ static void zigbee_ota_len_test_task(void *arg)
         for (size_t i = used; i < len; ++i) test[i] = (char)('A' + (i % 26));
         test[len] = '\0';
         ++iteration;
-        ESP_LOGI(TAG, "DIAG LEN iteration=%u bytes=%u transport=aps_ack_fragmentation",
+        ESP_LOGI(TAG, "DIAG LEN iteration=%u bytes=%u transport=aps_ack",
                  iteration, (unsigned)len);
         esp_err_t err = zigbee_ota_send_aps_payload(test);
         ESP_LOGI(TAG, "DIAG LEN request iteration=%u bytes=%u result=%s pending=%s",
@@ -346,7 +346,7 @@ static esp_err_t send_secure_hello(void)
     int payload_len = snprintf(payload, sizeof(payload), "H|%" PRIu64 "|%s", counter, signature_b64);
     if (payload_len <= 0 || payload_len > ZIGBEE_OTA_HELLO_FRAME_MAX) return ESP_ERR_INVALID_SIZE;
     ESP_LOGI(TAG,
-             "HELLO sending signed frame counter=%" PRIu64 " bytes=%d transport=APS ACK+fragmentation",
+             "HELLO sending signed frame counter=%" PRIu64 " bytes=%d transport=APS ACK one-shot",
              counter, payload_len);
     return zigbee_ota_send_aps_payload(payload);
 }
@@ -356,38 +356,30 @@ static void zigbee_ota_hello_task(void *arg)
     (void)arg;
     if (s_hello_delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(s_hello_delay_ms));
 
-    for (unsigned attempt = 1; !s_auth_challenge_received; ++attempt) {
-        if (!zigbee_ota_network_identity_valid()) {
-            if (attempt <= HELLO_WAIT_ATTEMPTS) {
-                ESP_LOGI(TAG, "HELLO waiting for joined Zigbee network attempt=%u/%u",
-                         attempt, HELLO_WAIT_ATTEMPTS);
-                vTaskDelay(pdMS_TO_TICKS(1000));
-                continue;
-            }
-            ESP_LOGE(TAG, "HELLO stopped: Zigbee network did not become valid");
-            break;
-        }
-
-        if (s_aps_tx_pending) {
-            const int64_t age_ms = s_aps_tx_started_ms > 0
-                ? (esp_timer_get_time() / 1000) - s_aps_tx_started_ms
-                : 0;
-            ESP_LOGW(TAG,
-                     "HELLO retry suppressed by APS backpressure pending_age_ms=%lld",
-                     (long long)age_ms);
-        } else {
-            esp_err_t err = send_secure_hello();
-            ESP_LOGI(TAG,
-                     "HELLO request result=%s attempt=%u next_retry_ms=%u (only after APS confirm clears pending)",
-                     esp_err_to_name(err), attempt, HELLO_RETRY_MS);
-        }
-
-        for (unsigned elapsed = 0; elapsed < HELLO_RETRY_MS && !s_auth_challenge_received; elapsed += 100)
-            vTaskDelay(pdMS_TO_TICKS(100));
+    unsigned wait_attempt = 0;
+    while (!zigbee_ota_network_identity_valid() && wait_attempt < HELLO_WAIT_ATTEMPTS) {
+        ++wait_attempt;
+        ESP_LOGI(TAG, "HELLO waiting for joined Zigbee network attempt=%u/%u",
+                 wait_attempt, HELLO_WAIT_ATTEMPTS);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    if (s_auth_challenge_received)
-        ESP_LOGI(TAG, "HELLO retry loop stopped: application challenge received");
+    if (!zigbee_ota_network_identity_valid()) {
+        ESP_LOGE(TAG, "HELLO stopped: Zigbee network did not become valid");
+        s_hello_task_started = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (s_aps_tx_pending) {
+        ESP_LOGW(TAG, "HELLO one-shot suppressed: APS request already pending");
+    } else {
+        const esp_err_t err = send_secure_hello();
+        ESP_LOGI(TAG,
+                 "HELLO one-shot request result=%s; automatic retry disabled until APS transport is proven",
+                 esp_err_to_name(err));
+    }
+
     s_hello_task_started = false;
     vTaskDelete(NULL);
 }
@@ -398,7 +390,7 @@ void zigbee_ota_schedule_hello(uint32_t delay_ms)
     s_hello_delay_ms = delay_ms;
     s_hello_task_started = true;
     ESP_LOGI(TAG,
-             "HELLO scheduled delay_ms=%lu transport=APS ACK+fragmentation backpressure=one-outstanding",
+             "HELLO scheduled delay_ms=%lu transport=APS ACK one-shot no-auto-retry",
              (unsigned long)delay_ms);
     if (xTaskCreate(zigbee_ota_hello_task, "zb_ota_hello", 4096, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "HELLO task create failed");
@@ -419,7 +411,7 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
     if (err == ESP_OK) {
         esp_zb_aps_data_confirm_handler_register(zigbee_ota_aps_confirm_handler);
         ESP_LOGW(TAG,
-                 "OTA transport registered: coordinator=0x0000 endpoint=1 cluster=0xfc00; uplink=APS ACK+fragmentation; one outstanding request; max_payload=%u",
+                 "OTA transport registered: coordinator=0x0000 endpoint=1 cluster=0xfc00; uplink=APS ACK; HELLO one-shot; one outstanding request; max_payload=%u",
                  ZIGBEE_OTA_COMMAND_PAYLOAD_MAX);
         zigbee_ota_schedule_hello(HELLO_START_DELAY_MS);
     }
