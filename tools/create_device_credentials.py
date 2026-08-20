@@ -96,7 +96,7 @@ def make_device_certificate(ca_cert: x509.Certificate, ca_key: ec.EllipticCurveP
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.KeyUsage(
             digital_signature=True, content_commitment=False, key_encipherment=False,
-            data_encipherment=False, key_agreement=False, key_cert_sign=False,
+            data_encipherment=False, key_agreement=True, key_cert_sign=False,
             crl_sign=False, encipher_only=False, decipher_only=False,
         ), critical=True)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
