@@ -21,6 +21,7 @@ static const char *TAG = "zigbee_ota_cluster";
 
 #define HELLO_WAIT_ATTEMPTS 30
 #define HELLO_SIGNATURE_B64_MAX 96
+#define HELLO_START_DELAY_MS 5000
 #define DIAG_PING "D|PING"
 #define DIAG_PONG "D|PONG"
 #define DIAG_LEN_PREFIX "D|LEN|"
@@ -86,7 +87,6 @@ static esp_err_t zigbee_ota_send_command_payload(const char *payload)
     cmd.data.value = wire;
 
     esp_zb_lock_acquire(portMAX_DELAY);
-    /* ESP Zigbee SDK 1.x returns the ZCL transaction sequence number here, not esp_err_t. */
     const uint8_t tsn = esp_zb_zcl_custom_cluster_cmd_req(&cmd);
     esp_zb_lock_release();
 
@@ -204,6 +204,7 @@ static void zigbee_ota_hello_task(void *arg)
     if (s_hello_delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(s_hello_delay_ms));
     for (unsigned attempt = 1; attempt <= HELLO_WAIT_ATTEMPTS; ++attempt) {
         if (!zigbee_ota_network_identity_valid()) {
+            ESP_LOGI(TAG, "HELLO waiting for joined Zigbee network attempt=%u/%u", attempt, HELLO_WAIT_ATTEMPTS);
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
@@ -211,6 +212,9 @@ static void zigbee_ota_hello_task(void *arg)
         if (err == ESP_OK) s_hello_sent_this_boot = true;
         ESP_LOGI(TAG, "HELLO one-shot custom ZCL request result=%s; no automatic retry", esp_err_to_name(err));
         break;
+    }
+    if (!s_hello_sent_this_boot) {
+        ESP_LOGE(TAG, "HELLO not sent: Zigbee network did not become usable within wait window");
     }
     s_hello_task_started = false;
     vTaskDelete(NULL);
@@ -221,8 +225,11 @@ void zigbee_ota_schedule_hello(uint32_t delay_ms)
     if (s_hello_sent_this_boot || s_hello_task_started) return;
     s_hello_delay_ms = delay_ms;
     s_hello_task_started = true;
-    if (xTaskCreate(zigbee_ota_hello_task, "zb_ota_hello", 4096, NULL, 5, NULL) != pdPASS)
+    ESP_LOGI(TAG, "HELLO scheduled delay_ms=%lu transport=custom_zcl one-shot", (unsigned long)delay_ms);
+    if (xTaskCreate(zigbee_ota_hello_task, "zb_ota_hello", 4096, NULL, 5, NULL) != pdPASS) {
         s_hello_task_started = false;
+        ESP_LOGE(TAG, "HELLO task create failed");
+    }
 }
 
 esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
@@ -235,9 +242,11 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
         cluster, ZIGBEE_OTA_CLUSTER_ID, ZIGBEE_OTA_CONFIG_ATTR_ID,
         ZIGBEE_OTA_MANUFACTURER_CODE, ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
         access, s_ota_payload_attr);
-    if (err == ESP_OK)
+    if (err == ESP_OK) {
         ESP_LOGW(TAG, "OTA cluster registered endpoint=%u cluster=0x%04x transport=custom ZCL command; HELLO one-shot; legacy attr retained",
                  ZIGBEE_OTA_ENDPOINT, ZIGBEE_OTA_CLUSTER_ID);
+        zigbee_ota_schedule_hello(HELLO_START_DELAY_MS);
+    }
     return err;
 }
 
