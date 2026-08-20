@@ -11,10 +11,6 @@ set(ROOT_CA_EMBED "${CMAKE_CURRENT_BINARY_DIR}/root_ca_cert.pem")
 set(OTA_SERVER_CERT_EMBED "${CMAKE_CURRENT_BINARY_DIR}/ota_server_cert.pem")
 set(OTA_CA_BUNDLE "${CMAKE_CURRENT_BINARY_DIR}/ota_server_ca_bundle.pem")
 
-# Device credentials are manufacturing artifacts, not source files.  On the
-# first configure, provision them automatically.  Never regenerate a partial
-# credential set automatically: that could replace the identity of an already
-# provisioned physical device.
 set(DEVICE_CREDENTIAL_PRESENT_COUNT 0)
 foreach(CREDENTIAL_FILE IN ITEMS
         "${DEVICE_CERT_SOURCE}"
@@ -107,6 +103,7 @@ if(CONFIG_APP_ZIGBEE_MINIMAL_TEST)
             "input.c"
             "minimal_app_state.c"
             "ota_config.c"
+            "ota_secure_session.c"
             "ota_service.c"
             "ota_wifi.c"
             "status_led.c"
@@ -150,6 +147,7 @@ else()
             "zigbee.c"
             "zigbee_ota_cluster.c"
             "ota_config.c"
+            "ota_secure_session.c"
             "debug_console.c"
             "ota_service.c"
             "ota_wifi.c"
