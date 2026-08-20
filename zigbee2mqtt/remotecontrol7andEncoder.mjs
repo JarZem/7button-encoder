@@ -87,6 +87,16 @@ const validateOtaCommand = (value) => {
     if (!OTA_TOKEN_RE.test(fields[4])) throw new Error('OTA token must be exactly 16 base64url characters');
 };
 
+const logOtaHello = (msg, meta, payload) => {
+    if (!payload.startsWith('H|')) return;
+    const parts = payload.split('|');
+    const counter = parts.length >= 2 ? parts[1] : '?';
+    const ieee = msg?.device?.ieeeAddr ?? meta?.device?.ieeeAddr ?? 'unknown';
+    meta?.logger?.info?.(
+        `OTA HELLO received from ${ieee} endpoint=${msg?.endpoint?.ID ?? '?'} cluster=0x${OTA_CLUSTER_ID.toString(16)} bytes=${Buffer.byteLength(payload, 'utf8')} counter=${counter}`,
+    );
+};
+
 const remoteFromOnOff = {
     cluster: 'genOnOff',
     type: ['attributeReport', 'readResponse'],
@@ -150,7 +160,7 @@ const remoteFromOtaCommand = {
 const remoteFromOtaRaw = {
     cluster: OTA_CLUSTER_NAME,
     type: ['raw'],
-    convert: (model, msg) => {
+    convert: (model, msg, publish, options, meta) => {
         if (msg.endpoint.ID !== OTA_ENDPOINT) return;
         const raw = msg.data?.data;
         if (raw === undefined || raw === null) return;
@@ -158,12 +168,17 @@ const remoteFromOtaRaw = {
         if (bytes.length < 2) return;
 
         const direct = bytes.toString('utf8');
-        if (/^(H|D|R)\|/.test(direct)) return {action: direct};
+        if (/^(H|D|R)\|/.test(direct)) {
+            logOtaHello(msg, meta, direct);
+            return {action: direct};
+        }
 
         if (bytes.length >= 4 && bytes[2] === OTA_CMD_FROM_DEVICE_ID) {
             const declaredLength = bytes[3];
             if (declaredLength < 1 || bytes.length < 4 + declaredLength) return;
-            return {action: bytes.subarray(4, 4 + declaredLength).toString('utf8')};
+            const payload = bytes.subarray(4, 4 + declaredLength).toString('utf8');
+            logOtaHello(msg, meta, payload);
+            return {action: payload};
         }
     },
 };
