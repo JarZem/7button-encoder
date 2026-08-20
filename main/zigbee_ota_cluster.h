@@ -16,8 +16,11 @@ extern "C" {
 
 /*
  * OTA/provisioning is a separate application service on endpoint 10.
- * Coordinator -> ESP uses command 0x04 (DEVICE_AUTH_CHALLENGE).
- * ESP -> coordinator uses direct APS payloads; 0x11 remains migration-only.
+ * Coordinator -> ESP currently uses the proven manufacturer-specific writable
+ * CHAR_STRING attribute 0x0001. This transport is used for challenge/provisioning
+ * payloads because it provides a normal ZCL write response and has already been
+ * verified end-to-end with Zigbee2MQTT.
+ * ESP -> coordinator uses custom command 0x11.
  */
 #define ZIGBEE_OTA_CMD_TO_DEVICE_ID              0x04
 #define ZIGBEE_OTA_CMD_FROM_DEVICE_ID            0x11
@@ -27,10 +30,9 @@ extern "C" {
 #define ZIGBEE_OTA_CMD_DEVICE_ENROLL_ID          0x05
 #define ZIGBEE_OTA_CMD_COMMAND_ACK_ID            0x06
 
-/* Legacy attribute is kept only for backward compatibility during migration. */
-#define ZIGBEE_OTA_ZCL_STRING_CAPACITY           40
+/* Must hold A|<16 hex message_id>|<64 hex challenge> (83 bytes) and future 100-byte diagnostics. */
+#define ZIGBEE_OTA_ZCL_STRING_CAPACITY           120
 
-/* APS application payload ceiling; 100-byte diagnostics are intentionally supported. */
 #define ZIGBEE_OTA_COMMAND_PAYLOAD_MAX            120
 #define ZIGBEE_OTA_HELLO_FRAME_MAX                112
 
