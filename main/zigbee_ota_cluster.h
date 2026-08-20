@@ -27,18 +27,6 @@ extern "C" {
 #define ZIGBEE_OTA_CMD_TO_DEVICE_ID              0x04
 #define ZIGBEE_OTA_CMD_FROM_DEVICE_ID            0x11
 
-/*
- * Command IDs registered by the ESP Zigbee stack for the dedicated OTA
- * endpoint. 0x04 is the active coordinator->device command ID. 0x05 and 0x06
- * are retained only because zigbee_minimal.c still registers these command
- * slots with ZBOSS; the current H/A/R/P protocol does not use them on wire.
- * Keeping the IDs declared is required for a clean build and does not change
- * the MQTT/ZCL transport, which currently uses attribute 0x0001 for downlink.
- */
-#define ZIGBEE_OTA_CMD_DEVICE_AUTH_CHALLENGE_ID  0x04
-#define ZIGBEE_OTA_CMD_DEVICE_ENROLL_ID           0x05
-#define ZIGBEE_OTA_CMD_COMMAND_ACK_ID             0x06
-
 #define ZIGBEE_OTA_ZCL_STRING_CAPACITY           120
 #define ZIGBEE_OTA_COMMAND_PAYLOAD_MAX           100
 #define ZIGBEE_OTA_HELLO_FRAME_MAX               100
