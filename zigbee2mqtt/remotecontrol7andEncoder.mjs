@@ -13,6 +13,7 @@ const OTA_DIAG_LEN_RE = /^D\|LEN\|(100|[1-9][0-9]?)$/;
 const OTA_CLUSTER_NAME = 'jarzemOta';
 const OTA_ATTR_NAME = 'otaCommand';
 const OTA_CMD_TO_DEVICE = 'otaToDevice';
+const OTA_CMD_TO_DEVICE_ID = 0x04;
 const OTA_CMD_FROM_DEVICE = 'otaFromDevice';
 const OTA_CMD_FROM_DEVICE_ID = 0x11;
 
@@ -131,12 +132,9 @@ const remoteFromOtaCommand = {
 };
 
 /*
- * ESP uplink now uses APSDE-DATA.request directly with:
- *   ACK_TX | FRAG_PERMITTED, dst short 0x0000, dst endpoint 1,
- *   profile 0x0104, cluster 0xfc00.
- * Herdsman exposes an APS payload which is not valid ZCL as type 'raw'.
- * New format is therefore the application bytes directly (H|..., D|..., R|...).
- * Legacy custom-ZCL raw frames are still decoded during migration.
+ * ESP uplink uses APSDE-DATA.request directly with ACK_TX | FRAG_PERMITTED,
+ * destination coordinator short address 0x0000, endpoint 1, profile 0x0104,
+ * cluster 0xfc00. Herdsman exposes non-ZCL APS payloads as type 'raw'.
  */
 const remoteFromOtaRaw = {
     cluster: OTA_CLUSTER_NAME,
@@ -148,9 +146,7 @@ const remoteFromOtaRaw = {
         if (bytes.length < 2) return;
 
         const direct = bytes.toString('utf8');
-        if (/^(H|D|R)\|/.test(direct)) {
-            return {action: direct};
-        }
+        if (/^(H|D|R)\|/.test(direct)) return {action: direct};
 
         if (bytes.length >= 4 && bytes[2] === OTA_CMD_FROM_DEVICE_ID) {
             const declaredLength = bytes[3];
@@ -190,10 +186,10 @@ const remoteToColorTemperature = {
 };
 
 /*
- * Downlink stays a SINGLE custom ZCL command (no application chunking).
- * disableResponse/disableDefaultResponse are intentional: herdsman still waits
- * for the Z-Stack AF dataConfirm, but it does not keep a second ZCL waiter alive.
- * End-to-end application confirmation is R|<message_id>|OK from ESP via APS.
+ * Coordinator -> ESP is one custom ZCL command, never split in application code.
+ * Command 0x04 is already registered by the ESP firmware as privileged
+ * DEVICE_AUTH_CHALLENGE. Herdsman waits for its AF dataConfirm; no extra ZCL
+ * waiter is kept. ESP confirms application delivery with R|message_id|OK via APS.
  */
 const remoteToOtaCommand = {
     key: ['ota_command'],
@@ -233,14 +229,14 @@ const definition = {
             commands: {
                 [OTA_CMD_TO_DEVICE]: {
                     name: OTA_CMD_TO_DEVICE,
-                    ID: 0x10,
+                    ID: OTA_CMD_TO_DEVICE_ID,
                     parameters: [{name: 'payload', type: Zcl.DataType.CHAR_STR}],
                 },
             },
             commandsResponse: {
                 [OTA_CMD_FROM_DEVICE]: {
                     name: OTA_CMD_FROM_DEVICE,
-                    ID: 0x11,
+                    ID: OTA_CMD_FROM_DEVICE_ID,
                     parameters: [{name: 'payload', type: Zcl.DataType.CHAR_STR}],
                 },
             },
