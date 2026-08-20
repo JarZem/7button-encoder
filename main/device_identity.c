@@ -66,6 +66,22 @@ uint16_t device_identity_get_key_id(void)
     return s_key_id;
 }
 
+esp_err_t device_identity_get_enrollment_counter(uint64_t *counter)
+{
+    ESP_RETURN_ON_FALSE(counter != NULL, ESP_ERR_INVALID_ARG, TAG, "missing enrollment counter");
+    nvs_handle_t handle;
+    ESP_RETURN_ON_ERROR(open_sec_nvs(NVS_READONLY, &handle), TAG, "open secure NVS failed");
+    uint64_t value = 0;
+    esp_err_t err = nvs_get_u64(handle, DEVICE_ENROLLMENT_COUNTER_NVS_KEY, &value);
+    nvs_close(handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        *counter = 0;
+        return ESP_OK;
+    }
+    if (err == ESP_OK) *counter = value;
+    return err;
+}
+
 esp_err_t device_identity_next_enrollment_counter(uint64_t *counter)
 {
     ESP_RETURN_ON_FALSE(counter != NULL, ESP_ERR_INVALID_ARG, TAG, "missing enrollment counter");
