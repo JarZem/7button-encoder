@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "mbedtls/ecdsa.h"
+#include "mbedtls/ecdh.h"
 #include "mbedtls/ecp.h"
 #include "mbedtls/pk.h"
 #include "mbedtls/private_access.h"
@@ -26,7 +27,10 @@ extern const char ota_server_cert_pem_end[] asm("_binary_ota_server_cert_pem_end
 
 static mbedtls_x509_crt s_cert;
 static mbedtls_pk_context s_private_key;
+static mbedtls_x509_crt s_root_ca;
+static mbedtls_x509_crt s_ota_server_cert;
 static bool s_initialized;
+static bool s_server_trust_initialized;
 
 static int esp_rng(void *ctx, unsigned char *buf, size_t len)
 {
@@ -71,6 +75,100 @@ esp_err_t device_credentials_init(void)
 
     s_initialized = true;
     ESP_LOGI(TAG, "device certificate/private key ready cert_der_len=%u", (unsigned)s_cert.raw.len);
+    return ESP_OK;
+}
+
+static esp_err_t init_server_trust(void)
+{
+    if (s_server_trust_initialized) return ESP_OK;
+
+    mbedtls_x509_crt_init(&s_root_ca);
+    mbedtls_x509_crt_init(&s_ota_server_cert);
+
+    const size_t ca_len = (size_t)(root_ca_cert_pem_end - root_ca_cert_pem_start);
+    const size_t server_len = (size_t)(ota_server_cert_pem_end - ota_server_cert_pem_start);
+
+    int ret = mbedtls_x509_crt_parse(&s_root_ca,
+                                     (const unsigned char *)root_ca_cert_pem_start,
+                                     ca_len);
+    if (ret != 0) {
+        ESP_LOGE(TAG, "root CA parse failed: -0x%04x", (unsigned)-ret);
+        return ESP_FAIL;
+    }
+
+    ret = mbedtls_x509_crt_parse(&s_ota_server_cert,
+                                 (const unsigned char *)ota_server_cert_pem_start,
+                                 server_len);
+    if (ret != 0) {
+        ESP_LOGE(TAG, "OTA server certificate parse failed: -0x%04x", (unsigned)-ret);
+        return ESP_FAIL;
+    }
+
+    uint32_t flags = 0;
+    ret = mbedtls_x509_crt_verify(&s_ota_server_cert,
+                                  &s_root_ca,
+                                  NULL,
+                                  NULL,
+                                  &flags,
+                                  NULL,
+                                  NULL);
+    if (ret != 0 || flags != 0) {
+        ESP_LOGE(TAG, "OTA server certificate CA verification failed ret=-0x%04x flags=0x%08lx",
+                 ret < 0 ? (unsigned)-ret : 0U,
+                 (unsigned long)flags);
+        return ESP_ERR_INVALID_CRC;
+    }
+
+    if (!mbedtls_pk_can_do(&s_ota_server_cert.pk, MBEDTLS_PK_ECKEY)) {
+        ESP_LOGE(TAG, "OTA server certificate key is not EC");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    s_server_trust_initialized = true;
+    ESP_LOGI(TAG, "OTA server certificate verified against embedded root CA");
+    return ESP_OK;
+}
+
+esp_err_t device_credentials_verify_ota_server_certificate(void)
+{
+    ESP_RETURN_ON_ERROR(device_credentials_init(), TAG, "device credentials unavailable");
+    return init_server_trust();
+}
+
+esp_err_t device_credentials_derive_ota_ecdh_secret(
+    uint8_t out[DEVICE_CREDENTIAL_ECDH_SECRET_LEN])
+{
+    ESP_RETURN_ON_FALSE(out != NULL, ESP_ERR_INVALID_ARG, TAG, "missing ECDH output");
+    ESP_RETURN_ON_ERROR(device_credentials_init(), TAG, "device credentials unavailable");
+    ESP_RETURN_ON_ERROR(init_server_trust(), TAG, "OTA server certificate not trusted");
+
+    mbedtls_ecp_keypair *device_ec = mbedtls_pk_ec(s_private_key);
+    mbedtls_ecp_keypair *server_ec = mbedtls_pk_ec(s_ota_server_cert.pk);
+    ESP_RETURN_ON_FALSE(device_ec != NULL && server_ec != NULL,
+                        ESP_ERR_NOT_SUPPORTED, TAG, "ECDH requires EC keys");
+    ESP_RETURN_ON_FALSE(device_ec->MBEDTLS_PRIVATE(grp).id == server_ec->MBEDTLS_PRIVATE(grp).id,
+                        ESP_ERR_INVALID_STATE, TAG, "ECDH curve mismatch");
+    ESP_RETURN_ON_FALSE(device_ec->MBEDTLS_PRIVATE(grp).id == MBEDTLS_ECP_DP_SECP256R1,
+                        ESP_ERR_NOT_SUPPORTED, TAG, "ECDH requires P-256");
+
+    mbedtls_mpi shared;
+    mbedtls_mpi_init(&shared);
+    int ret = mbedtls_ecdh_compute_shared(&device_ec->MBEDTLS_PRIVATE(grp),
+                                          &shared,
+                                          &server_ec->MBEDTLS_PRIVATE(Q),
+                                          &device_ec->MBEDTLS_PRIVATE(d),
+                                          esp_rng,
+                                          NULL);
+    if (ret == 0) {
+        ret = mbedtls_mpi_write_binary(&shared, out, DEVICE_CREDENTIAL_ECDH_SECRET_LEN);
+    }
+    mbedtls_mpi_free(&shared);
+
+    if (ret != 0) {
+        memset(out, 0, DEVICE_CREDENTIAL_ECDH_SECRET_LEN);
+        ESP_LOGE(TAG, "ECDH shared secret derivation failed: -0x%04x", (unsigned)-ret);
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 
