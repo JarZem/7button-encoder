@@ -6,6 +6,7 @@ const OTA_CLUSTER_ID = 0xfc00;
 const OTA_CONFIG_ATTR_ID = 0x0001;
 const OTA_MANUFACTURER_CODE = 0x1234;
 const OTA_COMMAND_MAX_LEN = 254;
+const OTA_ENDPOINT = 10;
 const OTA_CODE_RE = /^[0-9A-Za-z]{3}$/;
 const OTA_TOKEN_RE = /^[0-9A-Za-z_-]{16}$/;
 const OTA_AUTH_CHALLENGE_RE = /^A\|[0-9a-fA-F]{16}\|[0-9a-fA-F]{64}$/;
@@ -13,20 +14,27 @@ const OTA_DIAG_LEN_RE = /^D\|LEN\|(100|[1-9][0-9]?)$/;
 const OTA_CLUSTER_NAME = 'jarzemOta';
 const OTA_ATTR_NAME = 'otaCommand';
 const OTA_CMD_TO_DEVICE = 'otaToDevice';
-const OTA_CMD_TO_DEVICE_ID = 0x04;
 const OTA_CMD_FROM_DEVICE = 'otaFromDevice';
+const OTA_CMD_TO_DEVICE_ID = 0x04;
 const OTA_CMD_FROM_DEVICE_ID = 0x11;
 
+/*
+ * Application endpoint layout:
+ *   1..7 = Button 1..7
+ *   8    = Light
+ *   9    = Enable RS232
+ *   10   = OTA/provisioning only (custom cluster 0xfc00, not a HA control endpoint)
+ */
 const ENDPOINTS = {
-    switch1: 1,
-    switch2: 2,
-    switch3: 3,
-    switch4: 4,
-    switch5: 5,
-    switch6: 6,
-    enable_rs232: 7,
-    enable_ota: 8,
-    light: 9,
+    button1: 1,
+    button2: 2,
+    button3: 3,
+    button4: 4,
+    button5: 5,
+    button6: 6,
+    button7: 7,
+    light: 8,
+    enable_rs232: 9,
 };
 
 const COLOR_TEMP_MIN_MIRED = 154;
@@ -115,6 +123,7 @@ const remoteFromOtaAttribute = {
     cluster: OTA_CLUSTER_NAME,
     type: ['attributeReport', 'readResponse'],
     convert: (model, msg) => {
+        if (msg.endpoint.ID !== OTA_ENDPOINT) return;
         const value = msg.data?.[OTA_ATTR_NAME] ?? msg.data?.[OTA_CONFIG_ATTR_ID] ?? msg.data?.[String(OTA_CONFIG_ATTR_ID)];
         if (value === undefined || value === null) return;
         return {action: String(value)};
@@ -125,6 +134,7 @@ const remoteFromOtaCommand = {
     cluster: OTA_CLUSTER_NAME,
     type: ['commandOtaFromDevice'],
     convert: (model, msg) => {
+        if (msg.endpoint.ID !== OTA_ENDPOINT) return;
         const value = msg.data?.payload;
         if (value === undefined || value === null) return;
         return {action: String(value)};
@@ -132,14 +142,16 @@ const remoteFromOtaCommand = {
 };
 
 /*
- * ESP uplink uses APSDE-DATA.request directly with ACK_TX | FRAG_PERMITTED,
- * destination coordinator short address 0x0000, endpoint 1, profile 0x0104,
- * cluster 0xfc00. Herdsman exposes non-ZCL APS payloads as type 'raw'.
+ * ESP uplink uses APSDE-DATA.request with source endpoint 10 and cluster 0xfc00.
+ * Destination endpoint on the coordinator is its own AF endpoint (normally 1),
+ * which is independent of the ESP endpoint number. Herdsman exposes direct APS
+ * payloads that are not valid ZCL as type 'raw'.
  */
 const remoteFromOtaRaw = {
     cluster: OTA_CLUSTER_NAME,
     type: ['raw'],
     convert: (model, msg) => {
+        if (msg.endpoint.ID !== OTA_ENDPOINT) return;
         const raw = msg.data?.data;
         if (raw === undefined || raw === null) return;
         const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
@@ -157,7 +169,11 @@ const remoteFromOtaRaw = {
 };
 
 const remoteToOnOff = {
-    key: ['state','state_switch1','state_switch2','state_switch3','state_switch4','state_switch5','state_switch6','state_enable_rs232','state_enable_ota','state_light'],
+    key: [
+        'state',
+        'state_button1','state_button2','state_button3','state_button4','state_button5','state_button6','state_button7',
+        'state_light','state_enable_rs232',
+    ],
     convertSet: async (entity, key, value, meta) => {
         const endpointName = endpointNameFromStateKey(key, entity, meta);
         const state = String(value).toUpperCase();
@@ -185,17 +201,12 @@ const remoteToColorTemperature = {
     convertGet: async (entity, key, meta) => { await lightEndpoint(entity, meta).read('lightingColorCtrl', ['colorTemperature', 'colorMode']); },
 };
 
-/*
- * Coordinator -> ESP is one custom ZCL command, never split in application code.
- * Command 0x04 is already registered by the ESP firmware as privileged
- * DEVICE_AUTH_CHALLENGE. Herdsman waits for its AF dataConfirm; no extra ZCL
- * waiter is kept. ESP confirms application delivery with R|message_id|OK via APS.
- */
 const remoteToOtaCommand = {
     key: ['ota_command'],
     convertSet: async (entity, key, value, meta) => {
         validateOtaCommand(value);
-        const endpoint = meta.device.getEndpoint(ENDPOINTS.switch1) ?? entity;
+        const endpoint = meta.device.getEndpoint(OTA_ENDPOINT);
+        if (!endpoint) throw new Error(`OTA endpoint ${OTA_ENDPOINT} not found on device`);
         await endpoint.command(
             OTA_CLUSTER_NAME,
             OTA_CMD_TO_DEVICE,
@@ -217,7 +228,7 @@ const definition = {
     ],
     model: 'ESP32-C6-ENC',
     vendor: 'Jaros',
-    description: 'RemoteControl7Encoder six outputs with brightness, white temperature, RS232 and OTA enable switches',
+    description: 'RemoteControl7Encoder seven buttons, light brightness/white temperature, RS232 and dedicated OTA/provisioning endpoint',
     extend: [
         m.deviceAddCustomCluster(OTA_CLUSTER_NAME, {
             name: OTA_CLUSTER_NAME,
@@ -245,10 +256,11 @@ const definition = {
     fromZigbee: [remoteFromOnOff, remoteFromBrightness, remoteFromColorTemperature, remoteFromOtaAttribute, remoteFromOtaCommand, remoteFromOtaRaw],
     toZigbee: [remoteToOnOff, remoteToBrightness, remoteToColorTemperature, remoteToOtaCommand],
     exposes: [
+        e.switch().withEndpoint('button1'), e.switch().withEndpoint('button2'), e.switch().withEndpoint('button3'),
+        e.switch().withEndpoint('button4'), e.switch().withEndpoint('button5'), e.switch().withEndpoint('button6'),
+        e.switch().withEndpoint('button7'),
         e.light().withBrightness().withColorTemp([COLOR_TEMP_MIN_MIRED, COLOR_TEMP_MAX_MIRED]).withEndpoint('light'),
-        e.switch().withEndpoint('switch1'), e.switch().withEndpoint('switch2'), e.switch().withEndpoint('switch3'),
-        e.switch().withEndpoint('switch4'), e.switch().withEndpoint('switch5'), e.switch().withEndpoint('switch6'),
-        e.switch().withEndpoint('enable_rs232'), e.switch().withEndpoint('enable_ota'),
+        e.switch().withEndpoint('enable_rs232'),
     ],
     endpoint: () => ENDPOINTS,
     options: [],
@@ -267,6 +279,7 @@ const definition = {
             await lep.read('genLevelCtrl', ['currentLevel']);
             await lep.read('lightingColorCtrl', ['colorTemperature', 'colorMode']);
         }
+        if (!device.getEndpoint(OTA_ENDPOINT)) logger?.warn?.(`RemoteControl7Encoder OTA endpoint ${OTA_ENDPOINT} not found`);
     },
 };
 
