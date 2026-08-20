@@ -16,10 +16,10 @@ extern "C" {
 
 /*
  * OTA/provisioning is a separate application service on endpoint 10.
- * Coordinator -> ESP currently uses the proven manufacturer-specific writable
- * CHAR_STRING attribute 0x0001. This transport is used for challenge/provisioning
- * payloads because it provides a normal ZCL write response and has already been
- * verified end-to-end with Zigbee2MQTT.
+ * Coordinator -> ESP uses the manufacturer-specific writable CHAR_STRING
+ * attribute 0x0001. MQTT keeps the 32-byte challenge as 64 hex characters,
+ * while the Zigbee converter compacts it to 43-char base64url before radio TX.
+ * ESP decodes it back to the original 32 bytes and replies R|message_id|OK.
  * ESP -> coordinator uses custom command 0x11.
  */
 #define ZIGBEE_OTA_CMD_TO_DEVICE_ID              0x04
@@ -30,7 +30,7 @@ extern "C" {
 #define ZIGBEE_OTA_CMD_DEVICE_ENROLL_ID          0x05
 #define ZIGBEE_OTA_CMD_COMMAND_ACK_ID            0x06
 
-/* Must hold A|<16 hex message_id>|<64 hex challenge> (83 bytes) and future 100-byte diagnostics. */
+/* Compact A|<16 hex message_id>|<43 base64url challenge> is 62 bytes. */
 #define ZIGBEE_OTA_ZCL_STRING_CAPACITY           120
 
 #define ZIGBEE_OTA_COMMAND_PAYLOAD_MAX            120
