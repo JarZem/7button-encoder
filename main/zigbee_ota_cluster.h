@@ -17,10 +17,12 @@ extern "C" {
 
 /*
  * Dedicated OTA/provisioning service on endpoint 10, cluster 0xFC00.
- * Coordinator -> ESP: manufacturer-specific writable CHAR_STRING attr 0x0001.
- * ESP -> coordinator: custom command 0x11.
- * Secure protocol: H|counter|sig, A|random|sig, R|sig, P|AES-GCM.
- * Diagnostic tool: D|PING -> D|PONG, plus D|LEN|N / D|STOP.
+ * Coordinator -> ESP: manufacturer-specific writable OCTET_STRING attr 0x0001.
+ *   A is sent on radio as random8 || raw ECDSA signature64 (72 bytes).
+ *   P is sent on radio as raw AES-GCM ciphertext || tag.
+ *   D diagnostics are sent as ASCII bytes.
+ * ESP -> coordinator: custom command 0x11 with ASCII H/R/D frames.
+ * MQTT representation remains H|..., A|..., R|..., P|... .
  */
 #define ZIGBEE_OTA_CMD_TO_DEVICE_ID              0x04
 #define ZIGBEE_OTA_CMD_FROM_DEVICE_ID            0x11
