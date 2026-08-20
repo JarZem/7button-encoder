@@ -7,10 +7,9 @@ const OTA_CONFIG_ATTR_ID = 0x0001;
 const OTA_MANUFACTURER_CODE = 0x1234;
 const OTA_ENDPOINT = 10;
 const OTA_ZIGBEE_WIRE_MAX = 100;
-const OTA_TOKEN_RE = /^[0-9A-Za-z_-]{16}$/;
 const OTA_DIAG_LEN_RE = /^D\|LEN\|(100|[1-9][0-9]?)$/;
-const OTA_SECURE_CHALLENGE_RE = /^A1\|[1-9][0-9]{0,19}\|[0-9A-Za-z_-]{22}\|[0-9a-fA-F]{8}\|[0-9A-Za-z_-]{43}$/;
-const OTA_SECURE_PROVISION_RE = /^P1\|[0-9A-Za-z_-]+$/;
+const OTA_CHALLENGE_RE = /^A\|[0-9A-Za-z_-]{11}\|[0-9A-Za-z_-]{86}$/;
+const OTA_PROVISION_RE = /^P\|[0-9A-Za-z_-]+$/;
 const OTA_CLUSTER_NAME = 'jarzemOta';
 const OTA_ATTR_NAME = 'otaCommand';
 const OTA_CMD_TO_DEVICE = 'otaToDevice';
@@ -32,34 +31,33 @@ const validateOtaCommand=(value)=>{
     const bytes=Buffer.byteLength(value,'utf8');
     if(bytes<1||bytes>OTA_ZIGBEE_WIRE_MAX)throw new Error(`OTA Zigbee payload must be 1-${OTA_ZIGBEE_WIRE_MAX} bytes`);
     if(value==='D|PING'||value==='D|STOP'||OTA_DIAG_LEN_RE.test(value))return;
-    if(value.startsWith('A1|')){
-        if(!OTA_SECURE_CHALLENGE_RE.test(value))throw new Error('Secure challenge must be A1|COUNTER|RANDOM22|CRC32HEX8|AUTH43');
+    if(value.startsWith('A|')){
+        if(!OTA_CHALLENGE_RE.test(value))throw new Error('Challenge must be A|<11 base64url random>|<86 base64url ECDSA signature>');
         return;
     }
-    if(value.startsWith('P1|')){
-        if(!OTA_SECURE_PROVISION_RE.test(value))throw new Error('Secure provisioning must be P1|BASE64URL_CIPHERTEXT_TAG');
+    if(value.startsWith('P|')){
+        if(!OTA_PROVISION_RE.test(value))throw new Error('Provisioning must be P|<base64url AES-GCM ciphertext+tag>');
         return;
     }
-    if(value.startsWith('C|')){
-        const token=value.slice(2);
-        if(!OTA_TOKEN_RE.test(token))throw new Error('OTA check token must be exactly 16 base64url characters');
-        return;
-    }
-    throw new Error('OTA command must be D|PING, D|LEN|N, D|STOP, A1 secure challenge, P1 secure provisioning, or C|TOKEN');
+    throw new Error('OTA command must be D|PING, D|LEN|N, D|STOP, A|RANDOM|SIGNATURE, or P|CIPHERTEXT');
 };
 
-const logOtaHello=(msg,meta,payload)=>{if(!payload.startsWith('H|'))return;const parts=payload.split('|');const counter=parts.length>=2?parts[1]:'?';const ieee=msg?.device?.ieeeAddr??meta?.device?.ieeeAddr??'unknown';meta?.logger?.info?.(`[OTA/ZIGBEE RX] HELLO from ${ieee} endpoint=${msg?.endpoint?.ID??'?'} cluster=0x${OTA_CLUSTER_ID.toString(16)} bytes=${Buffer.byteLength(payload,'utf8')} counter=${counter}`);};
+const logOtaUplink=(msg,meta,payload)=>{
+    const ieee=msg?.device?.ieeeAddr??meta?.device?.ieeeAddr??'unknown';
+    const kind=payload.split('|',1)[0];
+    meta?.logger?.info?.(`[OTA/ZIGBEE RX] kind=${kind} from=${ieee} endpoint=${msg?.endpoint?.ID??'?'} cluster=0x${OTA_CLUSTER_ID.toString(16)} bytes=${Buffer.byteLength(payload,'utf8')}`);
+};
 
 const remoteFromOnOff={cluster:'genOnOff',type:['attributeReport','readResponse'],convert:(model,msg)=>{if(msg.data.onOff===undefined)return;const endpointName=endpointNameById(msg.endpoint.ID);if(!endpointName)return;return{[`state_${endpointName}`]:msg.data.onOff?'ON':'OFF'};}};
 const remoteFromBrightness={cluster:'genLevelCtrl',type:['attributeReport','readResponse'],convert:(model,msg)=>{if(msg.endpoint.ID!==ENDPOINTS.light||msg.data.currentLevel===undefined)return;return{brightness_light:msg.data.currentLevel};}};
 const remoteFromColorTemperature={cluster:'lightingColorCtrl',type:['attributeReport','readResponse'],convert:(model,msg)=>{if(msg.endpoint.ID!==ENDPOINTS.light)return;const result={};if(msg.data.colorTemperature!==undefined)result.color_temp_light=msg.data.colorTemperature;if(msg.data.colorMode!==undefined)result.color_mode_light=msg.data.colorMode===2?'color_temp':msg.data.colorMode;return Object.keys(result).length?result:undefined;}};
-const remoteFromOtaAttribute={cluster:OTA_CLUSTER_NAME,type:['attributeReport','readResponse'],convert:(model,msg)=>{if(msg.endpoint.ID!==OTA_ENDPOINT)return;const value=msg.data?.[OTA_ATTR_NAME]??msg.data?.[OTA_CONFIG_ATTR_ID]??msg.data?.[String(OTA_CONFIG_ATTR_ID)];if(value==null)return;return{action:String(value)};}};
-const remoteFromOtaCommand={cluster:OTA_CLUSTER_NAME,type:['commandOtaFromDevice'],convert:(model,msg,publish,options,meta)=>{if(msg.endpoint.ID!==OTA_ENDPOINT)return;const value=msg.data?.payload;if(value==null)return;const payload=String(value);logOtaHello(msg,meta,payload);return{action:payload};}};
-const remoteFromOtaRaw={cluster:OTA_CLUSTER_NAME,type:['raw'],convert:(model,msg,publish,options,meta)=>{if(msg.endpoint.ID!==OTA_ENDPOINT)return;const raw=Buffer.isBuffer(msg.data)?msg.data:msg.data?.data;if(raw==null)return;const bytes=Buffer.isBuffer(raw)?raw:Buffer.from(raw);if(bytes.length<2)return;const direct=bytes.toString('utf8');if(/^(H|D|R1)\|/.test(direct)){logOtaHello(msg,meta,direct);return{action:direct};}if(bytes.length>=4&&bytes[2]===OTA_CMD_FROM_DEVICE_ID){const declaredLength=bytes[3];if(declaredLength<1||bytes.length<4+declaredLength)return;const payload=bytes.subarray(4,4+declaredLength).toString('utf8');logOtaHello(msg,meta,payload);return{action:payload};}}};
+const remoteFromOtaAttribute={cluster:OTA_CLUSTER_NAME,type:['attributeReport','readResponse'],convert:(model,msg)=>{if(msg.endpoint.ID!==OTA_ENDPOINT)return;const value=msg.data?.[OTA_ATTR_NAME]??msg.data?.[OTA_CONFIG_ATTR_ID]??msg.data?.[String(OTA_CONFIG_ATTR_ID)];if(value==null)return;const payload=String(value);logOtaUplink(msg,undefined,payload);return{action:payload};}};
+const remoteFromOtaCommand={cluster:OTA_CLUSTER_NAME,type:['commandOtaFromDevice'],convert:(model,msg,publish,options,meta)=>{if(msg.endpoint.ID!==OTA_ENDPOINT)return;const value=msg.data?.payload;if(value==null)return;const payload=String(value);logOtaUplink(msg,meta,payload);return{action:payload};}};
+const remoteFromOtaRaw={cluster:OTA_CLUSTER_NAME,type:['raw'],convert:(model,msg,publish,options,meta)=>{if(msg.endpoint.ID!==OTA_ENDPOINT)return;const raw=Buffer.isBuffer(msg.data)?msg.data:msg.data?.data;if(raw==null)return;const bytes=Buffer.isBuffer(raw)?raw:Buffer.from(raw);if(bytes.length<2)return;const direct=bytes.toString('utf8');if(/^(H|D|R)\|/.test(direct)){logOtaUplink(msg,meta,direct);return{action:direct};}if(bytes.length>=4&&bytes[2]===OTA_CMD_FROM_DEVICE_ID){const declaredLength=bytes[3];if(declaredLength<1||bytes.length<4+declaredLength)return;const payload=bytes.subarray(4,4+declaredLength).toString('utf8');logOtaUplink(msg,meta,payload);return{action:payload};}}};
 const remoteToOnOff={key:['state','state_button1','state_button2','state_button3','state_button4','state_button5','state_button6','state_button7','state_light','state_enable_rs232'],convertSet:async(entity,key,value,meta)=>{const endpointName=endpointNameFromStateKey(key,entity,meta);const state=String(value).toUpperCase();const command=state==='ON'?'on':state==='OFF'?'off':'toggle';await endpointForName(entity,meta,endpointName).command('genOnOff',command,{}, {disableDefaultResponse:false});},convertGet:async(entity)=>{await entity.read('genOnOff',['onOff']);}};
 const remoteToBrightness={key:['brightness','brightness_light'],convertSet:async(entity,key,value,meta)=>{const brightness=clampNumber(value,0,254);await lightEndpoint(entity,meta).command('genLevelCtrl','moveToLevel',{level:brightness,transtime:0},{disableDefaultResponse:false});},convertGet:async(entity,key,meta)=>{await lightEndpoint(entity,meta).read('genLevelCtrl',['currentLevel']);}};
 const remoteToColorTemperature={key:['color_temp','color_temp_light'],convertSet:async(entity,key,value,meta)=>{const colorTemp=clampNumber(value,COLOR_TEMP_MIN_MIRED,COLOR_TEMP_MAX_MIRED);await lightEndpoint(entity,meta).command('lightingColorCtrl','moveToColorTemp',{colortemp:colorTemp,transtime:0},{disableDefaultResponse:false});},convertGet:async(entity,key,meta)=>{await lightEndpoint(entity,meta).read('lightingColorCtrl',['colorTemperature','colorMode']);}};
-const remoteToOtaCommand={key:['ota_command'],convertSet:async(entity,key,value,meta)=>{validateOtaCommand(value);const endpoint=meta.device.getEndpoint(OTA_ENDPOINT);if(!endpoint)throw new Error(`OTA endpoint ${OTA_ENDPOINT} not found on device`);meta?.logger?.info?.(`[OTA/ZIGBEE TX] write -> ${meta?.device?.ieeeAddr??'unknown'} endpoint=${OTA_ENDPOINT} cluster=0x${OTA_CLUSTER_ID.toString(16)} attr=0x${OTA_CONFIG_ATTR_ID.toString(16).padStart(4,'0')} bytes=${Buffer.byteLength(value,'utf8')} type=${value.split('|',1)[0]}`);await endpoint.write(OTA_CLUSTER_NAME,{[OTA_ATTR_NAME]:value},{manufacturerCode:OTA_MANUFACTURER_CODE});meta?.logger?.info?.(`[OTA/ZIGBEE TX] write response OK <- ${meta?.device?.ieeeAddr??'unknown'} endpoint=${OTA_ENDPOINT} bytes=${Buffer.byteLength(value,'utf8')}`);return{state:{}};}};
+const remoteToOtaCommand={key:['ota_command'],convertSet:async(entity,key,value,meta)=>{validateOtaCommand(value);const endpoint=meta.device.getEndpoint(OTA_ENDPOINT);if(!endpoint)throw new Error(`OTA endpoint ${OTA_ENDPOINT} not found on device`);const kind=value.split('|',1)[0];meta?.logger?.info?.(`[OTA/ZIGBEE TX] kind=${kind} -> ${meta?.device?.ieeeAddr??'unknown'} endpoint=${OTA_ENDPOINT} cluster=0x${OTA_CLUSTER_ID.toString(16)} attr=0x${OTA_CONFIG_ATTR_ID.toString(16).padStart(4,'0')} bytes=${Buffer.byteLength(value,'utf8')}`);await endpoint.write(OTA_CLUSTER_NAME,{[OTA_ATTR_NAME]:value},{manufacturerCode:OTA_MANUFACTURER_CODE});meta?.logger?.info?.(`[OTA/ZIGBEE TX] kind=${kind} write response OK endpoint=${OTA_ENDPOINT}`);return{state:{}};}};
 
 const definition={fingerprint:[{manufacturerName:'Jaros',modelID:'RemoteControl7Encoder'},{manufacturerName:'JaroslavZ',modelID:'ESP32-C6-ENC'}],model:'ESP32-C6-ENC',vendor:'Jaros',description:'RemoteControl7Encoder seven buttons, light brightness/white temperature, RS232 and dedicated OTA/provisioning endpoint',extend:[m.deviceAddCustomCluster(OTA_CLUSTER_NAME,{name:OTA_CLUSTER_NAME,ID:OTA_CLUSTER_ID,manufacturerCode:OTA_MANUFACTURER_CODE,attributes:{[OTA_ATTR_NAME]:{name:OTA_ATTR_NAME,ID:OTA_CONFIG_ATTR_ID,type:Zcl.DataType.CHAR_STR,write:true}},commands:{[OTA_CMD_TO_DEVICE]:{name:OTA_CMD_TO_DEVICE,ID:OTA_CMD_TO_DEVICE_ID,parameters:[{name:'payload',type:Zcl.DataType.CHAR_STR}]}},commandsResponse:{[OTA_CMD_FROM_DEVICE]:{name:OTA_CMD_FROM_DEVICE,ID:OTA_CMD_FROM_DEVICE_ID,parameters:[{name:'payload',type:Zcl.DataType.CHAR_STR}]}}})],fromZigbee:[remoteFromOnOff,remoteFromBrightness,remoteFromColorTemperature,remoteFromOtaAttribute,remoteFromOtaCommand,remoteFromOtaRaw],toZigbee:[remoteToOnOff,remoteToBrightness,remoteToColorTemperature,remoteToOtaCommand],exposes:[e.switch().withEndpoint('button1'),e.switch().withEndpoint('button2'),e.switch().withEndpoint('button3'),e.switch().withEndpoint('button4'),e.switch().withEndpoint('button5'),e.switch().withEndpoint('button6'),e.switch().withEndpoint('button7'),e.light().withBrightness().withColorTemp([COLOR_TEMP_MIN_MIRED,COLOR_TEMP_MAX_MIRED]).withEndpoint('light'),e.switch().withEndpoint('enable_rs232')],endpoint:()=>ENDPOINTS,options:[],meta:{multiEndpoint:true},configure:async(device,coordinatorEndpoint,logger)=>{for(const endpointId of Object.values(ENDPOINTS)){const endpoint=device.getEndpoint(endpointId);if(!endpoint){logger?.warn?.(`RemoteControl7Encoder endpoint ${endpointId} not found during configure`);continue;}await endpoint.read('genOnOff',['onOff']);}const lep=device.getEndpoint(ENDPOINTS.light);if(lep){await lep.read('genLevelCtrl',['currentLevel']);await lep.read('lightingColorCtrl',['colorTemperature','colorMode']);}if(!device.getEndpoint(OTA_ENDPOINT))logger?.warn?.(`RemoteControl7Encoder OTA endpoint ${OTA_ENDPOINT} not found`);}};
 export default definition;
