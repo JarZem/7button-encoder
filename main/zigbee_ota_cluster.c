@@ -223,7 +223,7 @@ static void zigbee_ota_diag_task(void *arg)
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_err_t err = zigbee_ota_send_command_payload(DIAG_PONG);
-    ESP_LOGI(TAG, "DIAG PING result custom_cmd=%s", esp_err_to_name(err));
+    ESP_LOGI(TAG, "MQTT/ZIGBEE TEST TX: D|PONG result=%s", esp_err_to_name(err));
     s_diag_task_started = false;
     vTaskDelete(NULL);
 }
@@ -256,9 +256,13 @@ static bool zigbee_ota_process_payload(const char *payload, size_t payload_len)
 {
     if (payload == NULL || payload_len == 0) return true;
 
+    ESP_LOGI(TAG, "MQTT/ZIGBEE TEST RX: endpoint=%u bytes=%u payload=%.*s",
+             ZIGBEE_OTA_ENDPOINT, (unsigned)payload_len, (int)payload_len, payload);
+
     if (process_auth_challenge(payload)) return true;
 
     if (strcmp(payload, DIAG_PING) == 0) {
+        ESP_LOGI(TAG, "MQTT/ZIGBEE TEST RX OK: D|PING received on endpoint=%u", ZIGBEE_OTA_ENDPOINT);
         if (!s_diag_task_started) {
             s_diag_task_started = true;
             if (xTaskCreate(zigbee_ota_diag_task, "zb_ota_diag", 3072, NULL, 5, NULL) != pdPASS)
@@ -380,15 +384,24 @@ bool zigbee_ota_cluster_handle_set_attr(const esp_zb_zcl_set_attr_value_message_
         message->info.cluster != ZIGBEE_OTA_CLUSTER_ID ||
         message->attribute.id != ZIGBEE_OTA_CONFIG_ATTR_ID) return false;
 
+    ESP_LOGI(TAG, "MQTT/ZIGBEE SET_ATTR callback endpoint=%u cluster=0x%04x attr=0x%04x type=0x%02x size=%u",
+             message->info.dst_endpoint,
+             message->info.cluster,
+             message->attribute.id,
+             message->attribute.data.type,
+             message->attribute.data.size);
+
     const esp_zb_zcl_attribute_data_t *data = &message->attribute.data;
     if (data->value == NULL || data->type != ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING || data->size < 1) return true;
     const uint8_t *zcl = (const uint8_t *)data->value;
     size_t len = zcl[0];
-    if (len == 0 || len > OTA_CONFIG_MAX_PAYLOAD_LEN || len + 1 > data->size) return true;
+    if (len == 0 || len > OTA_CONFIG_MAX_PAYLOAD_LEN || len + 1 > data->size) {
+        ESP_LOGE(TAG, "MQTT/ZIGBEE SET_ATTR invalid CHAR_STRING declared=%u size=%u", (unsigned)len, data->size);
+        return true;
+    }
     char payload[OTA_CONFIG_MAX_PAYLOAD_LEN + 1];
     memcpy(payload, &zcl[1], len);
     payload[len] = '\0';
-    ESP_LOGI(TAG, "OTA attribute rx endpoint=%u bytes=%u type=%c", ZIGBEE_OTA_ENDPOINT, (unsigned)len, payload[0]);
     return zigbee_ota_process_payload(payload, len);
 }
 
