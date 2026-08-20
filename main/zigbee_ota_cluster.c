@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
+#include "nvs.h"
 #include "ota_config.h"
 #include "ota_service.h"
 #include "zcl/esp_zigbee_zcl_common.h"
@@ -32,6 +33,15 @@ static const char *TAG = "zigbee_ota_cluster";
 #define DIAG_REPEAT_MS 20000
 #define OTA_MESSAGE_ID_HEX_LEN 16
 #define OTA_CHALLENGE_B64URL_LEN 43
+#define OTA_CHALLENGE_RESPONSE_DOMAIN "JaroslavZemanESP-DEVICE-CHALLENGE-RESPONSE-v1"
+#define OTA_SEC_NAMESPACE "ota_sec"
+#define OTA_NVS_CHALLENGE_MESSAGE_ID "auth_mid"
+#define OTA_NVS_CHALLENGE_VALUE "auth_chal"
+#define OTA_NVS_CHALLENGE_RESPONSE "auth_resp"
+#define OTA_NVS_CHALLENGE_PENDING "auth_pending"
+#define OTA_CHALLENGE_RESPONSE_BINARY_LEN (8 + DEVICE_CREDENTIAL_SIGNATURE_RAW_LEN)
+#define OTA_CHALLENGE_RESPONSE_B64_MAX 100
+#define OTA_CHALLENGE_RESPONSE_FRAME_MAX 104
 
 static uint8_t s_ota_payload_attr[ZIGBEE_OTA_ZCL_STRING_CAPACITY + 1];
 static bool s_hello_task_started;
@@ -42,6 +52,7 @@ static uint32_t s_hello_delay_ms;
 static volatile size_t s_len_test_payload_len;
 static char s_pending_message_id[OTA_MESSAGE_ID_HEX_LEN + 1];
 static uint8_t s_pending_challenge[DEVICE_AUTH_CHALLENGE_LEN];
+static char s_pending_challenge_response[OTA_CHALLENGE_RESPONSE_FRAME_MAX + 1];
 static bool s_pending_challenge_valid;
 
 static bool zigbee_ota_network_identity_valid(void)
@@ -61,6 +72,33 @@ static bool is_hex_string(const char *value, size_t len)
               (c >= 'A' && c <= 'F'))) return false;
     }
     return true;
+}
+
+static int hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static esp_err_t hex_decode_fixed(const char *hex, size_t hex_len, uint8_t *out, size_t out_len)
+{
+    if (hex == NULL || out == NULL || hex_len != out_len * 2) return ESP_ERR_INVALID_ARG;
+    for (size_t i = 0; i < out_len; ++i) {
+        const int hi = hex_nibble(hex[i * 2]);
+        const int lo = hex_nibble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return ESP_ERR_INVALID_ARG;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return ESP_OK;
+}
+
+static bool bytes_all_zero(const uint8_t *data, size_t len)
+{
+    uint8_t any = 0;
+    for (size_t i = 0; i < len; ++i) any |= data[i];
+    return any == 0;
 }
 
 static esp_err_t base64url_encode(const uint8_t *input, size_t input_len, char *out, size_t out_size)
@@ -110,6 +148,113 @@ static esp_err_t base64url_decode_challenge(const char *input,
     return ESP_OK;
 }
 
+static esp_err_t challenge_state_load(char message_id[OTA_MESSAGE_ID_HEX_LEN + 1],
+                                      uint8_t challenge[DEVICE_AUTH_CHALLENGE_LEN],
+                                      char response[OTA_CHALLENGE_RESPONSE_FRAME_MAX + 1],
+                                      bool *pending)
+{
+    if (message_id == NULL || challenge == NULL || response == NULL || pending == NULL) return ESP_ERR_INVALID_ARG;
+    message_id[0] = '\0';
+    response[0] = '\0';
+    memset(challenge, 0, DEVICE_AUTH_CHALLENGE_LEN);
+    *pending = false;
+
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(OTA_SEC_NAMESPACE, NVS_READONLY, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) return ESP_OK;
+    if (err != ESP_OK) return err;
+
+    uint8_t pending_u8 = 0;
+    size_t mid_len = OTA_MESSAGE_ID_HEX_LEN + 1;
+    size_t challenge_len = DEVICE_AUTH_CHALLENGE_LEN;
+    size_t response_len = OTA_CHALLENGE_RESPONSE_FRAME_MAX + 1;
+    esp_err_t mid_err = nvs_get_str(handle, OTA_NVS_CHALLENGE_MESSAGE_ID, message_id, &mid_len);
+    esp_err_t challenge_err = nvs_get_blob(handle, OTA_NVS_CHALLENGE_VALUE, challenge, &challenge_len);
+    esp_err_t response_err = nvs_get_str(handle, OTA_NVS_CHALLENGE_RESPONSE, response, &response_len);
+    esp_err_t pending_err = nvs_get_u8(handle, OTA_NVS_CHALLENGE_PENDING, &pending_u8);
+    nvs_close(handle);
+
+    if (mid_err == ESP_ERR_NVS_NOT_FOUND && challenge_err == ESP_ERR_NVS_NOT_FOUND &&
+        response_err == ESP_ERR_NVS_NOT_FOUND && pending_err == ESP_ERR_NVS_NOT_FOUND) return ESP_OK;
+    if (mid_err != ESP_OK || challenge_err != ESP_OK || response_err != ESP_OK || pending_err != ESP_OK ||
+        mid_len != OTA_MESSAGE_ID_HEX_LEN + 1 || challenge_len != DEVICE_AUTH_CHALLENGE_LEN ||
+        response_len < 2 || !is_hex_string(message_id, OTA_MESSAGE_ID_HEX_LEN)) {
+        memset(message_id, 0, OTA_MESSAGE_ID_HEX_LEN + 1);
+        memset(challenge, 0, DEVICE_AUTH_CHALLENGE_LEN);
+        memset(response, 0, OTA_CHALLENGE_RESPONSE_FRAME_MAX + 1);
+        return ESP_ERR_INVALID_STATE;
+    }
+    *pending = pending_u8 != 0;
+    return ESP_OK;
+}
+
+static esp_err_t challenge_state_save(const char *message_id,
+                                      const uint8_t challenge[DEVICE_AUTH_CHALLENGE_LEN],
+                                      const char *response)
+{
+    if (message_id == NULL || challenge == NULL || response == NULL ||
+        strlen(message_id) != OTA_MESSAGE_ID_HEX_LEN || !is_hex_string(message_id, OTA_MESSAGE_ID_HEX_LEN) ||
+        strlen(response) == 0 || strlen(response) > OTA_CHALLENGE_RESPONSE_FRAME_MAX) return ESP_ERR_INVALID_ARG;
+
+    nvs_handle_t handle;
+    ESP_RETURN_ON_ERROR(nvs_open(OTA_SEC_NAMESPACE, NVS_READWRITE, &handle), TAG, "challenge NVS open failed");
+    esp_err_t err = nvs_set_str(handle, OTA_NVS_CHALLENGE_MESSAGE_ID, message_id);
+    if (err == ESP_OK) err = nvs_set_blob(handle, OTA_NVS_CHALLENGE_VALUE, challenge, DEVICE_AUTH_CHALLENGE_LEN);
+    if (err == ESP_OK) err = nvs_set_str(handle, OTA_NVS_CHALLENGE_RESPONSE, response);
+    if (err == ESP_OK) err = nvs_set_u8(handle, OTA_NVS_CHALLENGE_PENDING, 1);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    return err;
+}
+
+static esp_err_t build_challenge_response(const char *message_id,
+                                          const uint8_t challenge[DEVICE_AUTH_CHALLENGE_LEN],
+                                          char out[OTA_CHALLENGE_RESPONSE_FRAME_MAX + 1])
+{
+    if (message_id == NULL || challenge == NULL || out == NULL ||
+        strlen(message_id) != OTA_MESSAGE_ID_HEX_LEN || !is_hex_string(message_id, OTA_MESSAGE_ID_HEX_LEN)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_RETURN_ON_ERROR(device_credentials_init(), TAG, "device credentials unavailable for challenge response");
+    char device_id[DEVICE_ID_MAX_LEN] = {0};
+    ESP_RETURN_ON_ERROR(device_identity_get_device_id(device_id), TAG, "device identity unavailable for challenge response");
+
+    uint8_t canonical[160];
+    const int prefix_len = snprintf((char *)canonical, sizeof(canonical), "%s|%s|%s|",
+                                    OTA_CHALLENGE_RESPONSE_DOMAIN, device_id, message_id);
+    if (prefix_len <= 0 || (size_t)prefix_len + DEVICE_AUTH_CHALLENGE_LEN > sizeof(canonical)) return ESP_ERR_INVALID_SIZE;
+    memcpy(canonical + prefix_len, challenge, DEVICE_AUTH_CHALLENGE_LEN);
+    const size_t canonical_len = (size_t)prefix_len + DEVICE_AUTH_CHALLENGE_LEN;
+
+    uint8_t signature[DEVICE_CREDENTIAL_SIGNATURE_RAW_LEN];
+    esp_err_t err = device_credentials_sign_raw64(canonical, canonical_len, signature);
+    memset(canonical, 0, sizeof(canonical));
+    if (err != ESP_OK) return err;
+
+    uint8_t message_id_raw[8];
+    err = hex_decode_fixed(message_id, OTA_MESSAGE_ID_HEX_LEN, message_id_raw, sizeof(message_id_raw));
+    if (err != ESP_OK) {
+        memset(signature, 0, sizeof(signature));
+        return err;
+    }
+
+    uint8_t packed[OTA_CHALLENGE_RESPONSE_BINARY_LEN];
+    memcpy(packed, message_id_raw, sizeof(message_id_raw));
+    memcpy(packed + sizeof(message_id_raw), signature, sizeof(signature));
+    memset(signature, 0, sizeof(signature));
+
+    char encoded[OTA_CHALLENGE_RESPONSE_B64_MAX];
+    err = base64url_encode(packed, sizeof(packed), encoded, sizeof(encoded));
+    memset(packed, 0, sizeof(packed));
+    if (err != ESP_OK) return err;
+
+    const int frame_len = snprintf(out, OTA_CHALLENGE_RESPONSE_FRAME_MAX + 1, "E|%s", encoded);
+    memset(encoded, 0, sizeof(encoded));
+    if (frame_len <= 0 || frame_len > OTA_CHALLENGE_RESPONSE_FRAME_MAX) return ESP_ERR_INVALID_SIZE;
+    return ESP_OK;
+}
+
 static esp_err_t zigbee_ota_send_command_payload(const char *payload)
 {
     if (payload == NULL) return ESP_ERR_INVALID_ARG;
@@ -147,31 +292,31 @@ static esp_err_t zigbee_ota_send_command_payload(const char *payload)
     return ESP_OK;
 }
 
-static void zigbee_ota_ack_task(void *arg)
+static void zigbee_ota_challenge_response_task(void *arg)
 {
-    char *message_id = (char *)arg;
-    if (message_id != NULL) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-        char ack[32];
-        snprintf(ack, sizeof(ack), "R|%s|OK", message_id);
-        const esp_err_t err = zigbee_ota_send_command_payload(ack);
-        ESP_LOGI(TAG, "DEVICE_AUTH_CHALLENGE application ACK message_id=%s result=%s",
-                 message_id, esp_err_to_name(err));
-        free(message_id);
-    }
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    char ack[32];
+    snprintf(ack, sizeof(ack), "R|%s|OK", s_pending_message_id);
+    esp_err_t err = zigbee_ota_send_command_payload(ack);
+    ESP_LOGI(TAG, "DEVICE_AUTH_CHALLENGE application ACK message_id=%s result=%s",
+             s_pending_message_id, esp_err_to_name(err));
+
+    vTaskDelay(pdMS_TO_TICKS(100));
+    err = zigbee_ota_send_command_payload(s_pending_challenge_response);
+    ESP_LOGI(TAG, "DEVICE_AUTH_CHALLENGE signed response TX message_id=%s bytes=%u result=%s payload=%s",
+             s_pending_message_id,
+             (unsigned)strlen(s_pending_challenge_response),
+             esp_err_to_name(err),
+             s_pending_challenge_response);
     vTaskDelete(NULL);
 }
 
-static void schedule_challenge_ack(const char *message_id)
+static void schedule_challenge_response(void)
 {
-    char *copy = strdup(message_id);
-    if (copy == NULL) {
-        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE ACK allocation failed");
-        return;
-    }
-    if (xTaskCreate(zigbee_ota_ack_task, "zb_ota_ack", 3072, copy, 5, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE ACK task create failed");
-        free(copy);
+    if (xTaskCreate(zigbee_ota_challenge_response_task, "zb_auth_resp", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE response task create failed");
     }
 }
 
@@ -188,7 +333,7 @@ static bool process_auth_challenge(const char *payload)
     }
 
     const char *challenge_b64 = separator + 1;
-    if (strlen(challenge_b64) != OTA_CHALLENGE_B64URL_LEN) {
+    if (strchr(challenge_b64, '|') != NULL || strlen(challenge_b64) != OTA_CHALLENGE_B64URL_LEN) {
         ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE rejected: invalid compact challenge length=%u expected=%u",
                  (unsigned)strlen(challenge_b64), OTA_CHALLENGE_B64URL_LEN);
         return true;
@@ -196,25 +341,82 @@ static bool process_auth_challenge(const char *payload)
 
     uint8_t challenge[DEVICE_AUTH_CHALLENGE_LEN];
     const esp_err_t decode_err = base64url_decode_challenge(challenge_b64, challenge);
-    if (decode_err != ESP_OK) {
-        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE rejected: base64url decode failed=%s",
-                 esp_err_to_name(decode_err));
+    if (decode_err != ESP_OK || bytes_all_zero(challenge, sizeof(challenge))) {
+        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE rejected: invalid challenge data decode=%s all_zero=%s",
+                 esp_err_to_name(decode_err), bytes_all_zero(challenge, sizeof(challenge)) ? "true" : "false");
+        memset(challenge, 0, sizeof(challenge));
         return true;
     }
 
-    memcpy(s_pending_message_id, message_id, OTA_MESSAGE_ID_HEX_LEN);
-    s_pending_message_id[OTA_MESSAGE_ID_HEX_LEN] = '\0';
+    char incoming_message_id[OTA_MESSAGE_ID_HEX_LEN + 1];
+    memcpy(incoming_message_id, message_id, OTA_MESSAGE_ID_HEX_LEN);
+    incoming_message_id[OTA_MESSAGE_ID_HEX_LEN] = '\0';
+
+    char stored_mid[OTA_MESSAGE_ID_HEX_LEN + 1];
+    uint8_t stored_challenge[DEVICE_AUTH_CHALLENGE_LEN];
+    char stored_response[OTA_CHALLENGE_RESPONSE_FRAME_MAX + 1];
+    bool stored_pending = false;
+    const esp_err_t load_err = challenge_state_load(stored_mid, stored_challenge, stored_response, &stored_pending);
+    if (load_err == ESP_OK && stored_pending && strcmp(stored_mid, incoming_message_id) == 0) {
+        if (memcmp(stored_challenge, challenge, DEVICE_AUTH_CHALLENGE_LEN) != 0) {
+            ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE rejected: message_id reuse with different challenge message_id=%s",
+                     incoming_message_id);
+            memset(challenge, 0, sizeof(challenge));
+            memset(stored_challenge, 0, sizeof(stored_challenge));
+            return true;
+        }
+        memcpy(s_pending_message_id, stored_mid, sizeof(s_pending_message_id));
+        memcpy(s_pending_challenge, stored_challenge, sizeof(s_pending_challenge));
+        strncpy(s_pending_challenge_response, stored_response, sizeof(s_pending_challenge_response) - 1);
+        s_pending_challenge_response[sizeof(s_pending_challenge_response) - 1] = '\0';
+        s_pending_challenge_valid = true;
+        ESP_LOGW(TAG, "DEVICE_AUTH_CHALLENGE duplicate accepted idempotently message_id=%s; using NVS response=%s",
+                 s_pending_message_id, s_pending_challenge_response);
+        memset(challenge, 0, sizeof(challenge));
+        memset(stored_challenge, 0, sizeof(stored_challenge));
+        schedule_challenge_response();
+        return true;
+    }
+    memset(stored_challenge, 0, sizeof(stored_challenge));
+
+    char response[OTA_CHALLENGE_RESPONSE_FRAME_MAX + 1];
+    const esp_err_t response_err = build_challenge_response(incoming_message_id, challenge, response);
+    if (response_err != ESP_OK) {
+        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE rejected: response signing failed=%s", esp_err_to_name(response_err));
+        memset(challenge, 0, sizeof(challenge));
+        return true;
+    }
+
+    const esp_err_t save_err = challenge_state_save(incoming_message_id, challenge, response);
+    if (save_err != ESP_OK) {
+        ESP_LOGE(TAG, "DEVICE_AUTH_CHALLENGE rejected: NVS persist failed=%s", esp_err_to_name(save_err));
+        memset(challenge, 0, sizeof(challenge));
+        memset(response, 0, sizeof(response));
+        return true;
+    }
+
+    memcpy(s_pending_message_id, incoming_message_id, sizeof(s_pending_message_id));
     memcpy(s_pending_challenge, challenge, sizeof(s_pending_challenge));
+    strncpy(s_pending_challenge_response, response, sizeof(s_pending_challenge_response) - 1);
+    s_pending_challenge_response[sizeof(s_pending_challenge_response) - 1] = '\0';
     s_pending_challenge_valid = true;
-    memset(challenge, 0, sizeof(challenge));
 
     ESP_LOGI(TAG,
-             "DEVICE_AUTH_CHALLENGE received endpoint=%u message_id=%s wire_bytes=%u challenge_bytes=%u stored=true",
+             "DEVICE_AUTH_CHALLENGE verified+stored endpoint=%u message_id=%s wire_bytes=%u challenge_bytes=%u nvs=ota_sec/%s response_bytes=%u",
              ZIGBEE_OTA_ENDPOINT,
              s_pending_message_id,
              (unsigned)strlen(payload),
-             DEVICE_AUTH_CHALLENGE_LEN);
-    schedule_challenge_ack(s_pending_message_id);
+             DEVICE_AUTH_CHALLENGE_LEN,
+             OTA_NVS_CHALLENGE_VALUE,
+             (unsigned)strlen(s_pending_challenge_response));
+    ESP_LOGI(TAG,
+             "DEVICE_AUTH_CHALLENGE response canonical=%s|<device_id>|%s|<32 raw challenge bytes>",
+             OTA_CHALLENGE_RESPONSE_DOMAIN, s_pending_message_id);
+    ESP_LOGI(TAG, "DEVICE_AUTH_CHALLENGE response payload=%s", s_pending_challenge_response);
+
+    memset(challenge, 0, sizeof(challenge));
+    memset(response, 0, sizeof(response));
+    schedule_challenge_response();
     return true;
 }
 
