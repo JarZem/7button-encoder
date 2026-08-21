@@ -19,6 +19,7 @@
 #define OTA_SEC_STATE_MAGIC 0x53543231u
 #define OTA_SEC_PROVISION_MAGIC 0x50563231u
 #define OTA_SEC_SIG_B64URL_LEN 86
+#define OTA_SEC_SIG_B64_PADDED_LEN 88
 #define OTA_SEC_RANDOM_B64URL_LEN 11
 #define OTA_SEC_GCM_TAG_LEN 16
 #define OTA_SEC_GCM_NONCE_LEN 12
@@ -340,19 +341,27 @@ esp_err_t ota_secure_session_accept_challenge(const char *payload,
     uint8_t key[32];
     ESP_RETURN_ON_ERROR(derive_session_key(s_counter, random, key), TAG, "session key derivation failed");
 
+    size_t response_len = 0;
+    ESP_RETURN_ON_ERROR(build_response_canonical(s_counter, random, canonical, sizeof(canonical), &response_len), TAG, "response canonical failed");
+    uint8_t response_sig[DEVICE_CREDENTIAL_SIGNATURE_RAW_LEN];
+    ESP_RETURN_ON_ERROR(device_credentials_sign_raw64(canonical, response_len, response_sig), TAG, "R signing failed");
+    char response_b64[OTA_SEC_SIG_B64_PADDED_LEN + 1];
+    ESP_RETURN_ON_ERROR(base64url_encode(response_sig, sizeof(response_sig), response_b64, sizeof(response_b64)), TAG, "R encoding failed");
+    if (strlen(response_b64) != OTA_SEC_SIG_B64URL_LEN) return ESP_ERR_INVALID_SIZE;
+    const int n = snprintf(response_out, OTA_SECURE_ACK_MAX_LEN, "R|%s", response_b64);
+    if (n <= 0 || n >= OTA_SECURE_ACK_MAX_LEN) return ESP_ERR_INVALID_SIZE;
+
     memcpy(s_random, random, sizeof(s_random));
     memcpy(s_session_key, key, sizeof(s_session_key));
     s_state = OTA_SEC_STATE_WAIT_PROVISIONING;
-    ESP_RETURN_ON_ERROR(persist_state(), TAG, "persist WAIT_PROVISIONING failed");
-
-    size_t response_len = 0;
-    ESP_RETURN_ON_ERROR(build_response_canonical(s_counter, s_random, canonical, sizeof(canonical), &response_len), TAG, "response canonical failed");
-    uint8_t response_sig[DEVICE_CREDENTIAL_SIGNATURE_RAW_LEN];
-    ESP_RETURN_ON_ERROR(device_credentials_sign_raw64(canonical, response_len, response_sig), TAG, "R signing failed");
-    char response_b64[OTA_SEC_SIG_B64URL_LEN + 1];
-    ESP_RETURN_ON_ERROR(base64url_encode(response_sig, sizeof(response_sig), response_b64, sizeof(response_b64)), TAG, "R encoding failed");
-    const int n = snprintf(response_out, OTA_SECURE_ACK_MAX_LEN, "R|%s", response_b64);
-    if (n <= 0 || n >= OTA_SECURE_ACK_MAX_LEN) return ESP_ERR_INVALID_SIZE;
+    esp_err_t persist_err = persist_state();
+    if (persist_err != ESP_OK) {
+        s_state = OTA_SEC_STATE_WAIT_CHALLENGE;
+        memset(s_random, 0, sizeof(s_random));
+        memset(s_session_key, 0, sizeof(s_session_key));
+        response_out[0] = '\0';
+        return persist_err;
+    }
 
     ESP_LOGI(TAG, "A verified: CA=OK ECDSA=OK ECDH=OK; state WAIT_CHALLENGE -> WAIT_PROVISIONING counter=%llu",
              (unsigned long long)s_counter);
