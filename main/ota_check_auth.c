@@ -274,11 +274,8 @@ esp_err_t ota_check_auth_prepare_request(const char *payload, size_t payload_len
     if (kind == NULL || strcmp(kind, "C") != 0 || version == NULL || code == NULL ||
         random_b64 == NULL || mac_b64 == NULL || strtok_r(NULL, "|", &save) != NULL) return ESP_ERR_INVALID_ARG;
     if (strlen(version) == 0 || strlen(version) > OTA_CHECK_MAX_VERSION_LEN || strlen(code) != OTA_CONFIG_CODE_LEN) return ESP_ERR_INVALID_SIZE;
-
-    const esp_app_desc_t *running = esp_app_get_description();
-    if (!version_is_newer(version, running->version)) {
-        ESP_LOGI(TAG, "OTA CHECK skipped: offered=%s running=%s", version, running->version);
-        return ESP_ERR_INVALID_VERSION;
+    for (size_t i = 0; i < OTA_CONFIG_CODE_LEN; ++i) {
+        if (!isalnum((unsigned char)code[i])) return ESP_ERR_INVALID_ARG;
     }
 
     uint8_t grant_random[OTA_CHECK_RANDOM_LEN];
@@ -306,6 +303,12 @@ esp_err_t ota_check_auth_prepare_request(const char *payload, size_t payload_len
     if (memcmp(mac, received_mac, OTA_CHECK_MAC_LEN) != 0) {
         ESP_LOGE(TAG, "OTA CHECK rejected: MAC mismatch");
         return ESP_ERR_INVALID_CRC;
+    }
+
+    const esp_app_desc_t *running = esp_app_get_description();
+    if (!version_is_newer(version, running->version)) {
+        ESP_LOGI(TAG, "OTA CHECK authenticated but skipped: offered=%s running=%s", version, running->version);
+        return ESP_ERR_INVALID_VERSION;
     }
 
     char device_id[DEVICE_ID_MAX_LEN];
