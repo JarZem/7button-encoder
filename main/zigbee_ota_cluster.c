@@ -218,6 +218,11 @@ static void ota_check_task(void *arg)
         return;
     }
 
+    /* The worker is created from the Zigbee SET_ATTR callback.  Do not touch
+     * Zigbee attributes/reporting until that callback has completely returned
+     * to the stack; otherwise ZCL can be entered recursively. */
+    vTaskDelay(pdMS_TO_TICKS(100));
+
     char request[OTA_CONFIG_MAX_PAYLOAD_LEN + 1];
     size_t request_len = 0;
     const esp_err_t err = ota_check_auth_prepare_request(ctx->payload, ctx->len,
