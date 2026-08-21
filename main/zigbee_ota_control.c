@@ -152,7 +152,7 @@ static void apply_enable_task(void *arg)
     if (enabled != s_enable_ota) { vTaskDelete(NULL); return; }
     publish_state();
     if (enabled) {
-        ota_secure_session_reset_for_retry();
+        ota_secure_session_begin_reprovisioning();
         zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_PROVISIONING_STARTED);
         zigbee_ota_schedule_hello(0);
     } else {
