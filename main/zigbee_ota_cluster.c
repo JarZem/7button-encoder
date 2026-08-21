@@ -86,7 +86,10 @@ static esp_err_t zigbee_ota_send_command_payload(const char *payload)
     cmd.data.type = ESP_ZB_ZCL_ATTR_TYPE_SET;
     cmd.data.size = payload_len + 1;
     cmd.data.value = wire;
-    esp_zb_lock_acquire(portMAX_DELAY);
+    if (!esp_zb_lock_acquire(portMAX_DELAY)) {
+        ESP_LOGW(TAG, "OTA command blocked: Zigbee lock not acquired");
+        return ESP_ERR_TIMEOUT;
+    }
     const uint8_t tsn = esp_zb_zcl_custom_cluster_cmd_req(&cmd);
     esp_zb_lock_release();
     ESP_LOGI(TAG, "OTA custom command tx cluster=0x%04x cmd=0x%02x bytes=%u tsn=0x%02x payload=%s",
@@ -202,29 +205,67 @@ static void zigbee_ota_len_test_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static bool process_ota_check(const char *payload, size_t payload_len)
+typedef struct {
+    size_t len;
+    char payload[OTA_CONFIG_MAX_PAYLOAD_LEN + 1];
+} ota_check_task_arg_t;
+
+static void ota_check_task(void *arg)
 {
-    if (payload == NULL || payload_len < 3 || strncmp(payload, "C|", 2) != 0) return false;
+    ota_check_task_arg_t *ctx = (ota_check_task_arg_t *)arg;
+    if (ctx == NULL) {
+        vTaskDelete(NULL);
+        return;
+    }
+
     char request[OTA_CONFIG_MAX_PAYLOAD_LEN + 1];
     size_t request_len = 0;
-    const esp_err_t err = ota_check_auth_prepare_request(payload, payload_len,
+    const esp_err_t err = ota_check_auth_prepare_request(ctx->payload, ctx->len,
                                                           request, sizeof(request), &request_len);
     if (err == ESP_ERR_INVALID_VERSION) {
         zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_SKIPPED);
         ESP_LOGI(TAG, "OTA CHECK valid but firmware is not newer; skipped");
-        return true;
-    }
-    if (err != ESP_OK) {
+    } else if (err != ESP_OK) {
         zigbee_ota_control_set_status(err == ESP_ERR_INVALID_CRC
                                           ? ZIGBEE_OTA_STATUS_FW_VERIFY_ERROR
                                           : ZIGBEE_OTA_STATUS_FW_UPDATE_ERROR);
         ESP_LOGW(TAG, "OTA CHECK rejected: %s", esp_err_to_name(err));
+    } else {
+        zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_UPDATE_STARTED);
+        if (!ota_service_request_payload(request, request_len)) {
+            zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_UPDATE_ERROR);
+            ESP_LOGW(TAG, "OTA CHECK accepted but OTA request queue is busy/full");
+        }
+    }
+
+    memset(ctx, 0, sizeof(*ctx));
+    free(ctx);
+    vTaskDelete(NULL);
+}
+
+static bool schedule_ota_check(const char *payload, size_t payload_len)
+{
+    if (payload == NULL || payload_len < 3 || strncmp(payload, "C|", 2) != 0) return false;
+    if (payload_len > OTA_CONFIG_MAX_PAYLOAD_LEN) {
+        ESP_LOGW(TAG, "OTA CHECK rejected: payload too large (%u)", (unsigned)payload_len);
         return true;
     }
-    zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_UPDATE_STARTED);
-    if (!ota_service_request_payload(request, request_len)) {
+
+    ota_check_task_arg_t *ctx = calloc(1, sizeof(*ctx));
+    if (ctx == NULL) {
         zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_UPDATE_ERROR);
-        ESP_LOGW(TAG, "OTA CHECK accepted but OTA request queue is busy/full");
+        ESP_LOGE(TAG, "OTA CHECK rejected: no memory for worker");
+        return true;
+    }
+    memcpy(ctx->payload, payload, payload_len);
+    ctx->payload[payload_len] = '\0';
+    ctx->len = payload_len;
+
+    if (xTaskCreate(ota_check_task, "ota_check", 6144, ctx, 5, NULL) != pdPASS) {
+        memset(ctx, 0, sizeof(*ctx));
+        free(ctx);
+        zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_UPDATE_ERROR);
+        ESP_LOGE(TAG, "OTA CHECK rejected: worker task creation failed");
     }
     return true;
 }
@@ -234,7 +275,7 @@ static bool zigbee_ota_process_payload(const char *payload, size_t payload_len)
     if (payload == NULL || payload_len == 0) return true;
     ESP_LOGI(TAG, "MQTT/ZIGBEE RX endpoint=%u state=%s bytes=%u payload=%.*s",
              ZIGBEE_OTA_ENDPOINT, ota_secure_session_state_name(), (unsigned)payload_len, (int)payload_len, payload);
-    if (process_ota_check(payload, payload_len)) return true;
+    if (schedule_ota_check(payload, payload_len)) return true;
     if (process_secure_protocol(payload)) return true;
     if (strcmp(payload, DIAG_PING) == 0) {
         ESP_LOGI(TAG, "MQTT/ZIGBEE TEST RX OK: D|PING received on endpoint=%u", ZIGBEE_OTA_ENDPOINT);
