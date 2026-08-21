@@ -5,17 +5,21 @@
 #include "esp_zigbee_cluster.h"
 #include "esp_zigbee_core.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "zigbee_ota_cluster.h"
 #include "ota_secure_session.h"
+#include "ota_service.h"
 #include "zcl/esp_zigbee_zcl_command.h"
 
 static const char *TAG = "zigbee_ota_control";
 
 #define ZB_OTA_CONTROL_DEVICE_ID 0xff02
+#define OTA_STATUS_MONITOR_MS 250
 
 static bool s_enable_ota = false;
 static uint8_t s_status = ZIGBEE_OTA_STATUS_IDLE;
 static bool s_endpoint_registered;
+static bool s_monitor_started;
 
 static bool network_ready(void)
 {
@@ -68,6 +72,56 @@ static void set_attr_locked(uint16_t cluster_id, uint16_t attr_id, void *value)
     }
 }
 
+void zigbee_ota_control_set_status(zigbee_ota_status_t status)
+{
+    if (s_status == (uint8_t)status) return;
+    s_status = (uint8_t)status;
+    set_attr_locked(ZIGBEE_OTA_STATUS_CLUSTER_ID, ZIGBEE_OTA_STATUS_ATTR_ID, &s_status);
+    ESP_LOGI(TAG, "OTA Status=%u", (unsigned)s_status);
+    report_attr(ZIGBEE_OTA_STATUS_CLUSTER_ID, ZIGBEE_OTA_STATUS_ATTR_ID);
+}
+
+static void ota_status_monitor_task(void *arg)
+{
+    (void)arg;
+    ota_state_t previous = OTA_STATE_IDLE;
+    while (true) {
+        const ota_state_t state = ota_service_get_state();
+        if (state != previous) {
+            switch (state) {
+                case OTA_STATE_CONNECTING_WIFI:
+                case OTA_STATE_DOWNLOADING:
+                    if (zigbee_ota_control_is_enabled() &&
+                        s_status != ZIGBEE_OTA_STATUS_FW_UPDATE_STARTED) {
+                        zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_UPDATE_STARTED);
+                    }
+                    break;
+                case OTA_STATE_SUCCESS:
+                    if (zigbee_ota_control_is_enabled()) {
+                        zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_UPDATE_COMPLETE);
+                    }
+                    break;
+                case OTA_STATE_FAILED:
+                    if (zigbee_ota_control_is_enabled()) {
+                        const esp_err_t err = ota_service_get_last_error();
+                        if (err == ESP_ERR_INVALID_VERSION) {
+                            zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_SKIPPED);
+                        } else if (err == ESP_ERR_INVALID_CRC) {
+                            zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_VERIFY_ERROR);
+                        } else {
+                            zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_UPDATE_ERROR);
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+            previous = state;
+        }
+        vTaskDelay(pdMS_TO_TICKS(OTA_STATUS_MONITOR_MS));
+    }
+}
+
 esp_err_t zigbee_ota_control_add_endpoint(esp_zb_ep_list_t *ep_list)
 {
     ESP_RETURN_ON_FALSE(ep_list != NULL, ESP_ERR_INVALID_ARG, TAG, "ep_list is NULL");
@@ -108,7 +162,7 @@ esp_err_t zigbee_ota_control_add_endpoint(esp_zb_ep_list_t *ep_list)
     ESP_RETURN_ON_FALSE(status_cluster != NULL, ESP_ERR_NO_MEM, TAG, "OTA Status cluster allocation failed");
     const uint8_t status_access = ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY |
                                   ESP_ZB_ZCL_ATTR_ACCESS_REPORTING |
-                                  ESP_ZB_ZCL_ATTR_MANUF_SPEC;
+                                  ESP_ZB_ZCL_ATTR_ACCESS_MANUF_SPEC;
     ESP_RETURN_ON_ERROR(esp_zb_cluster_add_manufacturer_attr(
                             status_cluster,
                             ZIGBEE_OTA_STATUS_CLUSTER_ID,
@@ -132,6 +186,10 @@ esp_err_t zigbee_ota_control_add_endpoint(esp_zb_ep_list_t *ep_list)
         s_endpoint_registered = true;
         ESP_LOGI(TAG, "endpoint=%u EnableOTA cluster=0x%04x bool default=0; Status cluster=0x%04x u8 default=0",
                  ZIGBEE_OTA_CONTROL_ENDPOINT, ZIGBEE_OTA_ENABLE_CLUSTER_ID, ZIGBEE_OTA_STATUS_CLUSTER_ID);
+        if (!s_monitor_started) {
+            s_monitor_started = xTaskCreate(ota_status_monitor_task, "ota_status", 3072, NULL, 4, NULL) == pdPASS;
+            if (!s_monitor_started) ESP_LOGW(TAG, "OTA status monitor task creation failed");
+        }
     }
     return err;
 }
@@ -177,15 +235,6 @@ bool zigbee_ota_control_handle_set_attr(const esp_zb_zcl_set_attr_value_message_
 bool zigbee_ota_control_is_enabled(void)
 {
     return s_enable_ota;
-}
-
-void zigbee_ota_control_set_status(zigbee_ota_status_t status)
-{
-    if (s_status == (uint8_t)status) return;
-    s_status = (uint8_t)status;
-    set_attr_locked(ZIGBEE_OTA_STATUS_CLUSTER_ID, ZIGBEE_OTA_STATUS_ATTR_ID, &s_status);
-    ESP_LOGI(TAG, "OTA Status=%u", (unsigned)s_status);
-    report_attr(ZIGBEE_OTA_STATUS_CLUSTER_ID, ZIGBEE_OTA_STATUS_ATTR_ID);
 }
 
 uint8_t zigbee_ota_control_get_status(void)
