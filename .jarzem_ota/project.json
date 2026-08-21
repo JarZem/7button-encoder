@@ -4,8 +4,8 @@
   "firmware_filename": "remotecontrol7andEncoder.bin",
   "firmware": {
     "ota_ecosystem": "JaroslavZemanESP",
-    "device_model": "remotecontrol-encoder",
-    "product_role": "remotecontrol-encoder",
+    "device_model": "ESP32-C6-ENC",
+    "product_role": "six-strip-cct-led-controller",
     "firmware_product": "remotecontrol7andEncoder",
     "hardware_revision": "RevA",
     "chip_family": "ESP32-C6",
