@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "publish_url": "https://192.168.2.120:8443",
+  "firmware_filename": "remotecontrol7andEncoder.bin",
+  "firmware": {
+    "ota_ecosystem": "JaroslavZemanESP",
+    "device_model": "remotecontrol-encoder",
+    "product_role": "remotecontrol-encoder",
+    "firmware_product": "remotecontrol7andEncoder",
+    "hardware_revision": "RevA",
+    "chip_family": "ESP32-C6",
+    "flash_size": "16MB",
+    "firmware_channel": "stable",
+    "secure_version": 0,
+    "active": true
+  }
+}
