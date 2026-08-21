@@ -1,0 +1,3 @@
+[submodule "external/ota_server"]
+	path = external/ota_server
+	url = https://github.com/JarZem/ota_server.git
