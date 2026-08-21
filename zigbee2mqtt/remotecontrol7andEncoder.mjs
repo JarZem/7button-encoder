@@ -39,7 +39,10 @@ const decodeOtaControlUplink=(payload)=>{
     const m=/^T\|([01])\|([0-9A-Fa-f]{2})$/.exec(payload);
     if(!m)return undefined;
     const status=parseInt(m[2],16);
-    return{enable_ota:m[1]==='1'?'ON':'OFF',ota_status:decodeOtaStatus(status)};
+    return{
+        enable_ota_ota_control:m[1]==='1'?'ON':'OFF',
+        ota_status_ota_control:decodeOtaStatus(status),
+    };
 };
 
 const endpointNameById=(id)=>Object.entries(ENDPOINTS).find(([,v])=>v===id)?.[0];
