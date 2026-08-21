@@ -53,6 +53,9 @@ esp_err_t ota_secure_session_accept_challenge(const char *payload,
                                               char response_out[OTA_SECURE_ACK_MAX_LEN]);
 esp_err_t ota_secure_session_accept_provisioning(const char *payload);
 void ota_secure_session_reset_for_retry(void);
+/* Explicit user-requested reprovisioning: reset the protocol state to IDLE
+ * while retaining the last valid provisioning data in prov_v2. */
+void ota_secure_session_begin_reprovisioning(void);
 
 ota_secure_state_t ota_secure_session_state(void);
 const char *ota_secure_session_state_name(void);
