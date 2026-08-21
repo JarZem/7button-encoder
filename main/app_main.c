@@ -3,12 +3,9 @@
 #if CONFIG_APP_ZIGBEE_MINIMAL_TEST
 
 #include "event_bus.h"
-#include "device_auth.h"
-#include "device_identity.h"
 #include "fw_identity.h"
 #include "input.h"
 #include "minimal_app_state.h"
-#include "ota_service.h"
 #include "status_led.h"
 #include "storage.h"
 #include "zigbee_minimal.h"
@@ -48,7 +45,6 @@ static const char *event_name(input_event_type_t type)
         case INPUT_EVENT_ZIGBEE_BRIGHTNESS_SET: return "ZB_BRIGHTNESS_SET";
         case INPUT_EVENT_ZIGBEE_WHITE_TEMP_SET: return "ZB_WHITE_TEMP_SET";
         case INPUT_EVENT_ZIGBEE_RS232_SET: return "ZB_RS232_SET";
-        case INPUT_EVENT_ZIGBEE_OTA_SET: return "ZB_OTA_SET";
         default: return "UNKNOWN";
     }
 }
@@ -91,10 +87,6 @@ void app_main(void)
     log_partition_info();
     event_bus_init();
     storage_init();
-    ESP_ERROR_CHECK(device_identity_init());
-    ESP_ERROR_CHECK(device_auth_init());
-    ota_service_init();
-    ota_service_confirm_app_valid_after_boot(true);
     minimal_app_state_init();
     input_init();
     BaseType_t created = xTaskCreate(app_event_task, "app_event", 4096, NULL, 8, NULL);
@@ -109,8 +101,6 @@ void app_main(void)
 #else
 
 #include "event_bus.h"
-#include "device_auth.h"
-#include "device_identity.h"
 #include "fw_identity.h"
 #include "input.h"
 #include "state.h"
@@ -118,8 +108,6 @@ void app_main(void)
 #include "uart_transport.h"
 #include "zigbee.h"
 #include "debug_console.h"
-#include "ota_diagnostic.h"
-#include "ota_service.h"
 #include "power_manager.h"
 #include "status_led.h"
 #include "fatal_error.h"
@@ -141,7 +129,6 @@ static const char *event_name(input_event_type_t type)
         case INPUT_EVENT_ENCODER_CW:       return "ENCODER_CW";
         case INPUT_EVENT_ENCODER_CCW:      return "ENCODER_CCW";
         case INPUT_EVENT_ZIGBEE_REPAIR_REQUEST: return "ZB_REPAIR_REQUEST";
-        case INPUT_EVENT_OTA_REQUEST:      return "OTA_REQUEST";
         case INPUT_EVENT_ZIGBEE_SWITCH_SET: return "ZB_SWITCH_SET";
         case INPUT_EVENT_ZIGBEE_LIGHT_ONOFF_SET: return "ZB_LIGHT_ONOFF_SET";
         case INPUT_EVENT_ZIGBEE_BRIGHTNESS_SET: return "ZB_BRIGHTNESS_SET";
@@ -177,29 +164,14 @@ void app_main(void)
     FATAL_ERROR_CHECK(err);
 
     log_partition_info();
-
-#if CONFIG_APP_OTA_DIAG_ENABLE
-    ESP_LOGW(TAG, "DIAG: OTA WiFi HTTPS diagnostic active; UART, Zigbee and inputs are not started during this isolated test");
-    ota_diagnostic_start();
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-#endif
-
     power_manager_init();
-
     event_bus_init();
-
     storage_init();
-    FATAL_ERROR_CHECK(device_identity_init());
-    FATAL_ERROR_CHECK(device_auth_init());
     debug_console_init();
-    ota_service_init();
     uart_transport_init();
     state_init();
     zigbee_init();
     input_init();
-    ota_service_confirm_app_valid_after_boot(true);
 
     ESP_LOGI(TAG, "Remote control spuštěn");
 
@@ -214,8 +186,6 @@ void app_main(void)
 
             if (event.type == INPUT_EVENT_ZIGBEE_REPAIR_REQUEST) {
                 zigbee_request_repair();
-            } else if (event.type == INPUT_EVENT_OTA_REQUEST) {
-                ota_service_request_start();
             } else {
                 state_handle_input_event(&event);
             }
