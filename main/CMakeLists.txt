@@ -111,6 +111,7 @@ if(CONFIG_APP_ZIGBEE_MINIMAL_TEST)
             "storage.c"
             "zigbee_minimal.c"
             "zigbee_ota_cluster.c"
+            "zigbee_ota_control.c"
         INCLUDE_DIRS "."
         REQUIRES
             esp_driver_gpio
@@ -148,6 +149,7 @@ else()
             "storage.c"
             "zigbee.c"
             "zigbee_ota_cluster.c"
+            "zigbee_ota_control.c"
             "ota_config.c"
             "ota_secure_session.c"
             "debug_console.c"
