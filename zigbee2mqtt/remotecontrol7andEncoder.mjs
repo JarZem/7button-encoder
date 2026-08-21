@@ -1,5 +1,5 @@
 import projectDefinition from './remotecontrol7andEncoder.project.mjs';
-import * as ota from '../external/ota_server/zigbee2mqtt/jarzem_secure_ota.mjs';
+import * as ota from './jarzem_secure_ota.mjs';
 
 const augment=(definition)=>({
     ...definition,
