@@ -23,7 +23,7 @@ static const char *TAG = "zigbee_ota_cluster";
 #define HELLO_WAIT_ATTEMPTS 30
 #define HELLO_SIGNATURE_B64_MAX 96
 #define HELLO_START_DELAY_MS 5000
-#define HELLO_RETRY_MS 60000
+#define HELLO_RETRY_MS 120000
 #define DIAG_PING "D|PING"
 #define DIAG_PONG "D|PONG"
 #define DIAG_LEN_PREFIX "D|LEN|"
@@ -212,7 +212,6 @@ static esp_err_t process_binary_downlink(const uint8_t *body, size_t len)
 {
     if (body == NULL || len == 0) return ESP_ERR_INVALID_ARG;
 
-    /* Diagnostics remain readable ASCII even though the attribute is OCTET_STRING. */
     if (len <= DIAG_LEN_MAX && body[0] == 'D') {
         char text[DIAG_LEN_MAX + 1];
         memcpy(text, body, len); text[len] = '\0';
