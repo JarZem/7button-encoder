@@ -10,6 +10,7 @@
 #include "ota_secure_session.c"
 #undef ota_secure_session_is_provisioned
 
+#include "ota_check_auth.h"
 #include "zigbee_ota_control.h"
 
 void ota_secure_session_begin_reprovisioning(void)
@@ -26,6 +27,11 @@ void ota_secure_session_begin_reprovisioning(void)
 bool ota_secure_session_is_provisioned(void)
 {
     if (s_state == OTA_SEC_STATE_PROVISIONED && zigbee_ota_control_is_enabled()) {
+        const esp_err_t snapshot_err = ota_check_auth_snapshot_provisioning_context();
+        if (snapshot_err != ESP_OK) {
+            ESP_LOGW(TAG, "previous OTA context snapshot failed before reprovisioning: %s",
+                     esp_err_to_name(snapshot_err));
+        }
         ota_secure_session_begin_reprovisioning();
         return false;
     }
