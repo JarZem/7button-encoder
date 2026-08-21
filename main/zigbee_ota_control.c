@@ -18,6 +18,8 @@ static const char *TAG = "zigbee_ota_control";
 #define ZB_OTA_CONTROL_DEVICE_ID 0xff02
 #define OTA_STATUS_MONITOR_MS 250
 #define INITIAL_REPORT_RETRY_MS 500
+#define INITIAL_REPORT_REPEAT_COUNT 3
+#define INITIAL_REPORT_REPEAT_MS 1000
 
 static bool s_enable_ota = false;
 static uint8_t s_status = ZIGBEE_OTA_STATUS_IDLE;
@@ -51,7 +53,11 @@ static void report_attr(uint16_t cluster_id, uint16_t attr_id)
         .attributeID = attr_id,
     };
 
-    esp_zb_lock_acquire(portMAX_DELAY);
+    if (!esp_zb_lock_acquire(portMAX_DELAY)) {
+        ESP_LOGW(TAG, "report skipped: Zigbee lock acquire failed cluster=0x%04x attr=0x%04x",
+                 cluster_id, attr_id);
+        return;
+    }
     esp_err_t err = esp_zb_zcl_report_attr_cmd_req(&cmd);
     esp_zb_lock_release();
     if (err != ESP_OK) {
@@ -63,7 +69,11 @@ static void report_attr(uint16_t cluster_id, uint16_t attr_id)
 static void set_manufacturer_attr_locked(uint16_t cluster_id, uint16_t attr_id, void *value)
 {
     if (!s_endpoint_registered) return;
-    esp_zb_lock_acquire(portMAX_DELAY);
+    if (!esp_zb_lock_acquire(portMAX_DELAY)) {
+        ESP_LOGW(TAG, "set manufacturer attr skipped: Zigbee lock acquire failed cluster=0x%04x attr=0x%04x",
+                 cluster_id, attr_id);
+        return;
+    }
     esp_zb_zcl_status_t st = esp_zb_zcl_set_manufacturer_attribute_val(
         ZIGBEE_OTA_CONTROL_ENDPOINT,
         cluster_id,
@@ -109,13 +119,21 @@ static void initial_report_task(void *arg)
     while (!network_ready()) {
         vTaskDelay(pdMS_TO_TICKS(INITIAL_REPORT_RETRY_MS));
     }
+
     s_enable_ota = false;
     s_status = ZIGBEE_OTA_STATUS_IDLE;
     set_manufacturer_attr_locked(ZIGBEE_OTA_ENABLE_CLUSTER_ID, ZIGBEE_OTA_ENABLE_ATTR_ID, &s_enable_ota);
     set_manufacturer_attr_locked(ZIGBEE_OTA_STATUS_CLUSTER_ID, ZIGBEE_OTA_STATUS_ATTR_ID, &s_status);
-    report_attr(ZIGBEE_OTA_ENABLE_CLUSTER_ID, ZIGBEE_OTA_ENABLE_ATTR_ID);
-    report_attr(ZIGBEE_OTA_STATUS_CLUSTER_ID, ZIGBEE_OTA_STATUS_ATTR_ID);
-    ESP_LOGI(TAG, "initial HA state reported: Enable OTA=0 Status=idle");
+
+    for (unsigned attempt = 1; attempt <= INITIAL_REPORT_REPEAT_COUNT; ++attempt) {
+        report_attr(ZIGBEE_OTA_ENABLE_CLUSTER_ID, ZIGBEE_OTA_ENABLE_ATTR_ID);
+        report_attr(ZIGBEE_OTA_STATUS_CLUSTER_ID, ZIGBEE_OTA_STATUS_ATTR_ID);
+        ESP_LOGI(TAG, "initial HA state report attempt=%u: Enable OTA=0 Status=idle", attempt);
+        if (attempt < INITIAL_REPORT_REPEAT_COUNT) {
+            vTaskDelay(pdMS_TO_TICKS(INITIAL_REPORT_REPEAT_MS));
+        }
+    }
+
     s_initial_report_started = false;
     vTaskDelete(NULL);
 }
@@ -171,13 +189,10 @@ static void apply_enable_task(void *arg)
         return;
     }
     if (enabled) {
-        /* Enable OTA is a provisioning gate only. A fresh provisioning session
-         * must be started even when valid provisioning already exists. */
         ota_secure_session_reset_for_retry();
         zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_PROVISIONING_STARTED);
         zigbee_ota_schedule_hello(0);
     } else {
-        /* Closing the provisioning gate must not erase the result visible in HA. */
         ota_secure_session_reset_for_retry();
     }
     vTaskDelete(NULL);
@@ -273,7 +288,6 @@ bool zigbee_ota_control_handle_set_attr(const esp_zb_zcl_set_attr_value_message_
         return true;
     }
 
-    /* The ZCL stack already applied the manufacturer-specific write before this callback. */
     const bool enabled = *(bool *)message->attribute.data.value;
     s_enable_ota = enabled;
 
