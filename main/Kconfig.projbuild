@@ -1,12 +1,12 @@
-menu "Remote Control 7 OTA"
+menu "Remote Control 7"
 
 config APP_ZIGBEE_MINIMAL_TEST
     bool "Run minimal Zigbee pairing diagnostic firmware"
     default y
     help
-        Build only the minimal Zigbee End Device On/Off Light used for
-        Home Assistant/ZHA pairing diagnostics. Buttons, encoder, UART,
-        OTA, LEDs, application state and power-management code are not linked.
+        Build the simplified Zigbee application used during pairing and
+        endpoint diagnostics. The portable OTA component remains attached
+        independently through the ota_server submodule.
 
 config APP_ZIGBEE_DEFAULT_CHANNEL
     int "Zigbee default fast-pair channel"
@@ -30,64 +30,5 @@ config APP_ZIGBEE_SCAN_CHANNEL_MASK
     help
         Zigbee channel mask used after fast-pair attempts fail. Default
         covers channels 11..26. Example: channel 11 only is 0x00000800.
-
-config APP_OTA_ALLOW_SAME_VERSION
-    bool "Allow OTA image with the same version"
-    default n
-    help
-        If disabled, OTA rejects an image whose esp_app_desc version matches the running firmware.
-
-config APP_OTA_DRY_RUN
-    bool "OTA dry-run: download and verify only"
-    default y
-    help
-        If enabled, Zigbee-triggered OTA connects to Wi-Fi, downloads the image
-        over HTTPS and verifies SHA256, but does not write the OTA partition,
-        does not select a new boot partition and does not reboot.
-
-config APP_INSECURE_LEGACY_PROVISIONING
-    bool "Allow insecure legacy plaintext OTA provisioning"
-    default n
-    help
-        Development-only compatibility switch for old P|... Zigbee OTA
-        provisioning payloads. Production provisioning must require an
-        authenticated enrolled device.
-
-config APP_DEVICE_AUTH_HMAC_KEY_ID
-    int "ESP HMAC eFuse key slot for device authentication"
-    default 0
-    range 0 5
-    help
-        HMAC key slot used with esp_hmac_calculate(). The slot must be
-        provisioned with the per-device auth secret and an HMAC purpose.
-
-config APP_OTA_DIAG_ENABLE
-    bool "Run OTA HTTPS connectivity diagnostic on boot"
-    default n
-    help
-        Connects to the diagnostic Wi-Fi and checks the OTA HTTPS endpoint without an Authorization token.
-
-config APP_OTA_DIAG_WIFI_SSID
-    string "OTA diagnostic Wi-Fi SSID"
-    default "wifi"
-    depends on APP_OTA_DIAG_ENABLE
-
-config APP_OTA_DIAG_WIFI_PASSWORD
-    string "OTA diagnostic Wi-Fi password"
-    default "passwd"
-    depends on APP_OTA_DIAG_ENABLE
-
-config APP_OTA_DIAG_HOST
-    string "OTA diagnostic HTTPS host"
-    default "ota_server"
-    depends on APP_OTA_DIAG_ENABLE
-
-config APP_OTA_DIAG_PORT
-    int "OTA diagnostic HTTPS port"
-    default 8443
-    range 1 65535
-    depends on APP_OTA_DIAG_ENABLE
-
-comment "OTA HTTPS certificates are embedded from project cert/*.pem, cert/*.crt and cert/*.cer"
 
 endmenu
