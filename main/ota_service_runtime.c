@@ -4,6 +4,7 @@
  * compile-time/default OTA server port in the firmware.
  */
 #include <stdint.h>
+#include <string.h>
 
 #include "esp_err.h"
 #include "ota_secure_session.h"
@@ -13,10 +14,11 @@ static uint16_t ota_service_runtime_port(void)
     ota_secure_provisioning_t provisioning = {0};
     if (ota_secure_session_load_provisioning(&provisioning) != ESP_OK ||
         provisioning.ota_port == 0) {
+        memset(&provisioning, 0, sizeof(provisioning));
         return 0;
     }
     const uint16_t port = provisioning.ota_port;
-    ota_secure_session_clear_provisioning_copy(&provisioning);
+    memset(&provisioning, 0, sizeof(provisioning));
     return port;
 }
 
