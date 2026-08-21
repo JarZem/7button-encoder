@@ -25,6 +25,14 @@ def canon_a(device,counter,rnd): return f"A|{device}|{counter}|".encode()+rnd
 def canon_r(device,counter,rnd): return f"R|{device}|{counter}|".encode()+rnd+b"|OK"
 def load_key(p): return serialization.load_pem_private_key(Path(p).read_bytes(),password=None)
 def load_cert(p): return x509.load_pem_x509_certificate(Path(p).read_bytes())
+def verify_ota_identity(ota_key, ota_cert):
+    if not isinstance(ota_key, ec.EllipticCurvePrivateKey) or not isinstance(ota_key.curve, ec.SECP256R1):
+        raise SystemExit("OTA private key must be P-256")
+    cert_pub=ota_cert.public_key()
+    if not isinstance(cert_pub, ec.EllipticCurvePublicKey) or not isinstance(cert_pub.curve, ec.SECP256R1):
+        raise SystemExit("OTA certificate public key must be P-256")
+    if ota_key.public_key().public_numbers()!=cert_pub.public_numbers():
+        raise SystemExit("ERROR: --ota-key does NOT match --ota-cert. ESP will reject every challenge signed by this key.")
 def derive(ota_key,device_cert,device,counter,rnd):
     shared=ota_key.exchange(ec.ECDH(),device_cert.public_key())
     return hmac.new(shared,KDF_DOMAIN+device.encode()+struct.pack(">Q",counter)+rnd,hashlib.sha256).digest()
@@ -42,15 +50,18 @@ def show(device,wire):
 
 def main():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd",required=True)
-    c=sub.add_parser("challenge"); c.add_argument("--device-id",required=True); c.add_argument("--counter",type=int,required=True); c.add_argument("--ota-key",required=True); c.add_argument("--device-cert",required=True); c.add_argument("--state",default="esp_target_session.json")
+    c=sub.add_parser("challenge"); c.add_argument("--device-id",required=True); c.add_argument("--counter",type=int,required=True); c.add_argument("--ota-key",required=True); c.add_argument("--ota-cert",required=True); c.add_argument("--device-cert",required=True); c.add_argument("--state",default="esp_target_session.json")
     q=sub.add_parser("provision"); q.add_argument("--state",default="esp_target_session.json"); q.add_argument("--response",required=True); q.add_argument("--ota-key",required=True); q.add_argument("--device-cert",required=True); q.add_argument("--ssid",required=True); q.add_argument("--password",required=True); q.add_argument("--host",required=True); q.add_argument("--port",type=int,default=8443); q.add_argument("--security",default="WPA2"); q.add_argument("--channel",type=int,default=0)
     d=sub.add_parser("ping"); d.add_argument("--device-id",required=True)
     a=p.parse_args()
     if a.cmd=="ping": show(a.device_id,"D|PING"); return
     if a.cmd=="challenge":
-        ota=load_key(a.ota_key); dev=load_cert(a.device_cert); rnd=os.urandom(8)
-        sig=rawsig(ota.sign(canon_a(a.device_id,a.counter,rnd),ec.ECDSA(hashes.SHA256())))
+        ota=load_key(a.ota_key); ota_cert=load_cert(a.ota_cert); verify_ota_identity(ota,ota_cert); dev=load_cert(a.device_cert); rnd=os.urandom(8)
+        canonical=canon_a(a.device_id,a.counter,rnd)
+        sig=rawsig(ota.sign(canonical,ec.ECDSA(hashes.SHA256())))
         wire=f"A|{b64u(rnd)}|{b64u(sig)}"; Path(a.state).write_text(json.dumps({"device_id":a.device_id,"counter":a.counter,"random":b64u(rnd)}))
+        print("OTA_CERT_SHA256:",ota_cert.fingerprint(hashes.SHA256()).hex())
+        print("CANONICAL_SHA256:",hashlib.sha256(canonical).hexdigest())
         show(a.device_id,wire); print("NEXT: copy ESP R|... and run provision --response 'R|...'"); return
     st=json.loads(Path(a.state).read_text()); device=st["device_id"]; counter=int(st["counter"]); rnd=b64d(st["random"])
     dev=load_cert(a.device_cert); parts=a.response.split("|")
