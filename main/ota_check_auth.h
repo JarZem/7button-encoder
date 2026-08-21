@@ -9,11 +9,14 @@ extern "C" {
 
 #define OTA_CHECK_COMPLETION_MAX_LEN 16
 
+/* Copy the last successfully persisted provisioning counter+random into the
+ * durable OTA CHECK context. Safe to call after a successful P frame. */
+esp_err_t ota_check_auth_snapshot_provisioning_context(void);
+
 /*
- * Validate C|version|code|random|MAC using the provisioning session context
- * persisted by ota_secure_session. On success, derive the one-time Bearer
- * token, persist the active grant random and return a legacy C|token request
- * for ota_service so the existing tested HTTPS downloader can be reused.
+ * Validate C|version|code|random|MAC using the durable provisioning context.
+ * On success derive the one-time Bearer token, persist the active grant random
+ * and return C|token for the already tested ota_service HTTPS downloader.
  */
 esp_err_t ota_check_auth_prepare_request(const char *payload, size_t payload_len,
                                          char *out_request, size_t out_size,
