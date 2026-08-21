@@ -10,4 +10,5 @@ void status_led_set_failure(bool failed);
 void status_led_indicate_local_activity(void);
 void status_led_indicate_ha_command(void);
 void status_led_indicate_ha_publish(void);
+void status_led_indicate_provision_step(void);
 void status_led_fatal(void);
