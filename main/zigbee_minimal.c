@@ -23,6 +23,7 @@
 #include "zcl/esp_zigbee_zcl_color_control.h"
 #include "zcl/esp_zigbee_zcl_command.h"
 #include "zigbee_ota_cluster.h"
+#include "zigbee_ota_control.h"
 
 #if !defined ZB_ED_ROLE
 #error "Minimal Zigbee diagnostic firmware must be built as Zigbee End Device."
@@ -533,10 +534,11 @@ static void schedule_initial_on_off_reports(void)
     }
     schedule_level_report(ZB_MIN_REPORT_DELAY_MS + (100 * ZB_ENDPOINT_COUNT));
     schedule_color_temperature_report(ZB_MIN_REPORT_DELAY_MS + (100 * (ZB_ENDPOINT_COUNT + 1)));
-    ESP_LOGI(TAG, "scheduled initial OnOff reports application endpoints=1..%u Light endpoint=%u OTA endpoint=%u excluded",
+    ESP_LOGI(TAG, "scheduled initial OnOff reports application endpoints=1..%u Light endpoint=%u OTA endpoints=%u,%u excluded",
              ZB_ENDPOINT_COUNT,
              ZB_LIGHT_ENDPOINT,
-             ZIGBEE_OTA_ENDPOINT);
+             ZIGBEE_OTA_ENDPOINT,
+             ZIGBEE_OTA_CONTROL_ENDPOINT);
 }
 
 static esp_err_t verify_endpoint_clusters(esp_zb_ep_list_t *ep_list, uint8_t endpoint)
@@ -897,6 +899,9 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (zigbee_ota_control_handle_set_attr(message)) {
+        return ESP_OK;
+    }
     if (zigbee_ota_cluster_handle_set_attr(message)) {
         return ESP_OK;
     }
@@ -1085,9 +1090,7 @@ static void zigbee_task(void *arg)
     (void)arg;
 
     ESP_LOGI(TAG, "ESP Zigbee SDK: %s", esp_zb_get_version_string());
-    ESP_LOGI(TAG, "descriptor: ep1-7 Buttons, ep8 Light, ep9 EnableRS232, ep10 OTA/provisioning custom cluster=0x%04x profile=0x%04x",
-             ZIGBEE_OTA_CLUSTER_ID,
-             ESP_ZB_AF_HA_PROFILE_ID);
+    ESP_LOGI(TAG, "descriptor: ep1-7 Buttons, ep8 Light, ep9 EnableRS232, ep10 OTA/provisioning, ep11 EnableOTA+Status");
     load_fast_pair_channel();
 
     ESP_LOGI(TAG, "ZED config: install_code=%d keep_alive_ms=%u aging_timeout=%u fast_channel=%u fallback_mask=0x%08lx",
@@ -1118,12 +1121,15 @@ static void zigbee_task(void *arg)
     }
     ESP_ERROR_CHECK(add_light_control_clusters(ep_list));
     ESP_ERROR_CHECK(add_ota_command_cluster(ep_list));
+    ESP_ERROR_CHECK(zigbee_ota_control_add_endpoint(ep_list));
     for (uint8_t i = 0; i < ZB_ENDPOINT_COUNT; ++i) {
         ESP_ERROR_CHECK(verify_endpoint_clusters(ep_list, s_switch_endpoints[i]));
         ESP_ERROR_CHECK(add_basic_identity(ep_list, s_switch_endpoints[i]));
     }
     ESP_ERROR_CHECK(add_basic_identity(ep_list, ZIGBEE_OTA_ENDPOINT));
-    ESP_LOGI(TAG, "registered application endpoints=%u plus dedicated OTA endpoint=%u", ZB_ENDPOINT_COUNT, ZIGBEE_OTA_ENDPOINT);
+    ESP_ERROR_CHECK(add_basic_identity(ep_list, ZIGBEE_OTA_CONTROL_ENDPOINT));
+    ESP_LOGI(TAG, "registered application endpoints=%u plus OTA transport=%u and OTA control=%u",
+             ZB_ENDPOINT_COUNT, ZIGBEE_OTA_ENDPOINT, ZIGBEE_OTA_CONTROL_ENDPOINT);
     ESP_ERROR_CHECK(esp_zb_device_register(ep_list));
     ESP_LOGI(TAG, "esp_zb_device_register done");
 
@@ -1159,8 +1165,8 @@ void zigbee_minimal_apply_state(const device_state_t *state, bool ota_enabled, b
         s_endpoint_on[i] = (state->switches & (1U << i)) != 0;
     }
     const bool any_button_on = (state->switches & ((1U << ZB_SWITCH_COUNT) - 1U)) != 0;
-    s_endpoint_on[6] = any_button_on;       /* Button7 central state: any of 1..6 active. */
-    s_endpoint_on[7] = any_button_on;       /* Light state follows aggregate outputs. */
+    s_endpoint_on[6] = any_button_on;
+    s_endpoint_on[7] = any_button_on;
     s_endpoint_on[8] = state->rs232_enabled;
 
     s_brightness_percent = state->brightness > ZB_BRIGHTNESS_MAX ? ZB_BRIGHTNESS_MAX : state->brightness;
