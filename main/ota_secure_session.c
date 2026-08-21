@@ -444,6 +444,17 @@ void ota_secure_session_reset_for_retry(void)
     (void)persist_state();
 }
 
+void ota_secure_session_begin_reprovisioning(void)
+{
+    ESP_LOGI(TAG, "new provisioning requested: current session state=%s -> IDLE; last valid provisioning and OTA CHECK context retained",
+             ota_secure_session_state_name());
+    s_state = OTA_SEC_STATE_IDLE;
+    s_counter = 0;
+    memset(s_random, 0, sizeof(s_random));
+    memset(s_session_key, 0, sizeof(s_session_key));
+    (void)persist_state();
+}
+
 ota_secure_state_t ota_secure_session_state(void)
 {
     return s_state;
