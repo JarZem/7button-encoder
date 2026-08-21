@@ -162,7 +162,7 @@ esp_err_t zigbee_ota_control_add_endpoint(esp_zb_ep_list_t *ep_list)
     ESP_RETURN_ON_FALSE(status_cluster != NULL, ESP_ERR_NO_MEM, TAG, "OTA Status cluster allocation failed");
     const uint8_t status_access = ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY |
                                   ESP_ZB_ZCL_ATTR_ACCESS_REPORTING |
-                                  ESP_ZB_ZCL_ATTR_ACCESS_MANUF_SPEC;
+                                  ESP_ZB_ZCL_ATTR_MANUF_SPEC;
     ESP_RETURN_ON_ERROR(esp_zb_cluster_add_manufacturer_attr(
                             status_cluster,
                             ZIGBEE_OTA_STATUS_CLUSTER_ID,
