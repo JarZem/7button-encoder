@@ -17,6 +17,7 @@
 #include "ota_config.h"
 #include "ota_secure_session.h"
 #include "ota_service.h"
+#include "status_led.h"
 #include "zigbee_ota_control.h"
 #include "zcl/esp_zigbee_zcl_common.h"
 
@@ -97,6 +98,14 @@ static esp_err_t zigbee_ota_send_command_payload(const char *payload)
     return ESP_OK;
 }
 
+esp_err_t zigbee_ota_publish_control_state(bool enabled, uint8_t status)
+{
+    char payload[16];
+    const int n = snprintf(payload, sizeof(payload), "T|%u|%02X", enabled ? 1U : 0U, (unsigned)status);
+    if (n <= 0 || n >= (int)sizeof(payload)) return ESP_ERR_INVALID_SIZE;
+    return zigbee_ota_send_command_payload(payload);
+}
+
 esp_err_t zigbee_ota_report_download_complete(void)
 {
     char payload[OTA_CHECK_COMPLETION_MAX_LEN];
@@ -115,6 +124,7 @@ static void zigbee_ota_ack_task(void *arg)
     if (ack != NULL) {
         vTaskDelay(pdMS_TO_TICKS(50));
         const esp_err_t err = zigbee_ota_send_command_payload(ack);
+        if (err == ESP_OK) status_led_indicate_provision_step();
         ESP_LOGI(TAG, "R response TX state=%s bytes=%u result=%s payload=%s",
                  ota_secure_session_state_name(), (unsigned)strlen(ack), esp_err_to_name(err), ack);
         memset(ack, 0, strlen(ack));
@@ -149,6 +159,7 @@ static bool process_secure_protocol(const char *payload)
             ESP_LOGW(TAG, "A dropped/rejected state=%s result=%s", ota_secure_session_state_name(), esp_err_to_name(err));
             return true;
         }
+        status_led_indicate_provision_step();
         ESP_LOGI(TAG, "A accepted; state=%s; sending one R then waiting for P", ota_secure_session_state_name());
         schedule_secure_ack(ack);
         memset(ack, 0, sizeof(ack));
@@ -159,6 +170,7 @@ static bool process_secure_protocol(const char *payload)
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "P dropped/rejected state=%s result=%s", ota_secure_session_state_name(), esp_err_to_name(err));
         } else {
+            status_led_indicate_provision_step();
             zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_PROVISIONING_COMPLETE);
             zigbee_ota_control_set_enabled(false);
             ESP_LOGI(TAG, "P complete state=%s; provisioning finished; Enable OTA -> 0", ota_secure_session_state_name());
@@ -213,27 +225,17 @@ typedef struct {
 static void ota_check_task(void *arg)
 {
     ota_check_task_arg_t *ctx = (ota_check_task_arg_t *)arg;
-    if (ctx == NULL) {
-        vTaskDelete(NULL);
-        return;
-    }
-
-    /* The worker is created from the Zigbee SET_ATTR callback.  Do not touch
-     * Zigbee attributes/reporting until that callback has completely returned
-     * to the stack; otherwise ZCL can be entered recursively. */
+    if (ctx == NULL) { vTaskDelete(NULL); return; }
     vTaskDelay(pdMS_TO_TICKS(100));
 
     char request[OTA_CONFIG_MAX_PAYLOAD_LEN + 1];
     size_t request_len = 0;
-    const esp_err_t err = ota_check_auth_prepare_request(ctx->payload, ctx->len,
-                                                          request, sizeof(request), &request_len);
+    const esp_err_t err = ota_check_auth_prepare_request(ctx->payload, ctx->len, request, sizeof(request), &request_len);
     if (err == ESP_ERR_INVALID_VERSION) {
         zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_SKIPPED);
         ESP_LOGI(TAG, "OTA CHECK valid but firmware is not newer; skipped");
     } else if (err != ESP_OK) {
-        zigbee_ota_control_set_status(err == ESP_ERR_INVALID_CRC
-                                          ? ZIGBEE_OTA_STATUS_FW_VERIFY_ERROR
-                                          : ZIGBEE_OTA_STATUS_FW_UPDATE_ERROR);
+        zigbee_ota_control_set_status(err == ESP_ERR_INVALID_CRC ? ZIGBEE_OTA_STATUS_FW_VERIFY_ERROR : ZIGBEE_OTA_STATUS_FW_UPDATE_ERROR);
         ESP_LOGW(TAG, "OTA CHECK rejected: %s", esp_err_to_name(err));
     } else {
         zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_UPDATE_STARTED);
@@ -255,7 +257,6 @@ static bool schedule_ota_check(const char *payload, size_t payload_len)
         ESP_LOGW(TAG, "OTA CHECK rejected: payload too large (%u)", (unsigned)payload_len);
         return true;
     }
-
     ota_check_task_arg_t *ctx = calloc(1, sizeof(*ctx));
     if (ctx == NULL) {
         zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_FW_UPDATE_ERROR);
@@ -265,7 +266,6 @@ static bool schedule_ota_check(const char *payload, size_t payload_len)
     memcpy(ctx->payload, payload, payload_len);
     ctx->payload[payload_len] = '\0';
     ctx->len = payload_len;
-
     if (xTaskCreate(ota_check_task, "ota_check", 6144, ctx, 5, NULL) != pdPASS) {
         memset(ctx, 0, sizeof(*ctx));
         free(ctx);
@@ -309,26 +309,20 @@ static bool zigbee_ota_process_payload(const char *payload, size_t payload_len)
 static esp_err_t process_binary_downlink(const uint8_t *body, size_t len)
 {
     if (body == NULL || len == 0) return ESP_ERR_INVALID_ARG;
-
     if (len <= ZIGBEE_OTA_COMMAND_PAYLOAD_MAX && (body[0] == 'D' || body[0] == 'C')) {
         char text[ZIGBEE_OTA_COMMAND_PAYLOAD_MAX + 1];
         memcpy(text, body, len); text[len] = '\0';
         zigbee_ota_process_payload(text, len);
         return ESP_OK;
     }
-
     if (!zigbee_ota_control_is_enabled()) {
         ESP_LOGW(TAG, "binary secure provisioning downlink dropped: Enable OTA=0");
         return ESP_ERR_INVALID_STATE;
     }
-
     const ota_secure_state_t state = ota_secure_session_state();
     char text[OTA_SECURE_PROVISION_MAX_WIRE_LEN + 1];
     if (state == OTA_SEC_STATE_WAIT_CHALLENGE) {
-        if (len != OTA_BINARY_CHALLENGE_LEN) {
-            ESP_LOGW(TAG, "binary A dropped: state=WAIT_CHALLENGE bytes=%u expected=%u", (unsigned)len, (unsigned)OTA_BINARY_CHALLENGE_LEN);
-            return ESP_ERR_INVALID_SIZE;
-        }
+        if (len != OTA_BINARY_CHALLENGE_LEN) return ESP_ERR_INVALID_SIZE;
         char random_b64[16], sig_b64[96];
         ESP_RETURN_ON_ERROR(base64url_encode(body, OTA_SECURE_RANDOM_LEN, random_b64, sizeof(random_b64)), TAG, "A random encode failed");
         ESP_RETURN_ON_ERROR(base64url_encode(body + OTA_SECURE_RANDOM_LEN, DEVICE_CREDENTIAL_SIGNATURE_RAW_LEN, sig_b64, sizeof(sig_b64)), TAG, "A signature encode failed");
@@ -337,7 +331,6 @@ static esp_err_t process_binary_downlink(const uint8_t *body, size_t len)
         zigbee_ota_process_payload(text, (size_t)n);
         return ESP_OK;
     }
-
     if (state == OTA_SEC_STATE_WAIT_PROVISIONING) {
         char encrypted_b64[OTA_SECURE_PROVISION_MAX_WIRE_LEN];
         ESP_RETURN_ON_ERROR(base64url_encode(body, len, encrypted_b64, sizeof(encrypted_b64)), TAG, "P encoding failed");
@@ -346,7 +339,6 @@ static esp_err_t process_binary_downlink(const uint8_t *body, size_t len)
         zigbee_ota_process_payload(text, (size_t)n);
         return ESP_OK;
     }
-
     ESP_LOGW(TAG, "binary secure downlink replay/out-of-order dropped state=%s bytes=%u", ota_secure_session_state_name(), (unsigned)len);
     return ESP_ERR_INVALID_STATE;
 }
@@ -378,7 +370,6 @@ static void zigbee_ota_hello_task(void *arg)
 {
     (void)arg;
     if (s_hello_delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(s_hello_delay_ms));
-
     while (zigbee_ota_control_is_enabled() && !ota_secure_session_is_provisioned()) {
         bool network_ready = false;
         for (unsigned attempt = 1; attempt <= HELLO_WAIT_ATTEMPTS && zigbee_ota_control_is_enabled(); ++attempt) {
@@ -386,27 +377,24 @@ static void zigbee_ota_hello_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
         if (!zigbee_ota_control_is_enabled()) break;
-
         ota_secure_session_reset_for_retry();
         zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_PROVISIONING_STARTED);
         if (network_ready) {
             const esp_err_t err = send_secure_hello();
+            if (err == ESP_OK) status_led_indicate_provision_step();
             ESP_LOGI(TAG, "HELLO request result=%s state=%s secure-process-timeout=%u ms", esp_err_to_name(err), ota_secure_session_state_name(), HELLO_RETRY_MS);
             if (err != ESP_OK) zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_PROVISIONING_ERROR);
         } else {
             zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_PROVISIONING_ERROR);
         }
-
         for (unsigned elapsed = 0; elapsed < HELLO_RETRY_MS; elapsed += 1000) {
             if (!zigbee_ota_control_is_enabled() || ota_secure_session_is_provisioned()) break;
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
         if (!zigbee_ota_control_is_enabled() || ota_secure_session_is_provisioned()) break;
-
         zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_PROVISIONING_TIMEOUT);
         ota_secure_session_reset_for_retry();
     }
-
     if (!zigbee_ota_control_is_enabled()) ota_secure_session_reset_for_retry();
     s_hello_task_started = false;
     vTaskDelete(NULL);
@@ -414,10 +402,7 @@ static void zigbee_ota_hello_task(void *arg)
 
 void zigbee_ota_schedule_hello(uint32_t delay_ms)
 {
-    if (!zigbee_ota_control_is_enabled()) {
-        ESP_LOGI(TAG, "HELLO not scheduled: Enable OTA=0");
-        return;
-    }
+    if (!zigbee_ota_control_is_enabled()) { ESP_LOGI(TAG, "HELLO not scheduled: Enable OTA=0"); return; }
     if (s_hello_task_started) return;
     s_hello_delay_ms = delay_ms;
     s_hello_task_started = true;
@@ -435,7 +420,7 @@ esp_err_t zigbee_ota_cluster_add_attrs(esp_zb_attribute_list_t *cluster)
         ZIGBEE_OTA_MANUFACTURER_CODE, ESP_ZB_ZCL_ATTR_TYPE_OCTET_STRING, access, s_ota_payload_attr);
     if (err == ESP_OK) {
         ESP_RETURN_ON_ERROR(ota_secure_session_init(), TAG, "secure OTA session init failed");
-        ESP_LOGW(TAG, "OTA cluster endpoint=%u cluster=0x%04x attr=0x0001 protocol=H/A/R/P/C/F diag=D|PING/D|PONG; Enable OTA gates provisioning only", ZIGBEE_OTA_ENDPOINT, ZIGBEE_OTA_CLUSTER_ID);
+        ESP_LOGW(TAG, "OTA cluster endpoint=%u cluster=0x%04x attr=0x0001 protocol=H/A/R/P/C/F/T diag=D|PING/D|PONG; Enable OTA gates provisioning only", ZIGBEE_OTA_ENDPOINT, ZIGBEE_OTA_CLUSTER_ID);
     }
     return err;
 }
@@ -444,6 +429,7 @@ bool zigbee_ota_cluster_handle_set_attr(const esp_zb_zcl_set_attr_value_message_
 {
     if (message == NULL || message->info.status != ESP_ZB_ZCL_STATUS_SUCCESS || message->info.dst_endpoint != ZIGBEE_OTA_ENDPOINT ||
         message->info.cluster != ZIGBEE_OTA_CLUSTER_ID || message->attribute.id != ZIGBEE_OTA_CONFIG_ATTR_ID) return false;
+    status_led_indicate_ha_command();
     const esp_zb_zcl_attribute_data_t *data = &message->attribute.data;
     ESP_LOGI(TAG, "MQTT/ZIGBEE SET_ATTR endpoint=%u cluster=0x%04x type=0x%02x size=%u state=%s",
              message->info.dst_endpoint, message->info.cluster, data->type, data->size, ota_secure_session_state_name());
@@ -460,6 +446,7 @@ bool zigbee_ota_cluster_handle_custom_cmd(const esp_zb_zcl_custom_cluster_comman
 {
     if (message == NULL || message->info.status != ESP_ZB_ZCL_STATUS_SUCCESS || message->info.dst_endpoint != ZIGBEE_OTA_ENDPOINT ||
         message->info.cluster != ZIGBEE_OTA_CLUSTER_ID || message->info.command.id != ZIGBEE_OTA_CMD_TO_DEVICE_ID) return false;
+    status_led_indicate_ha_command();
     if (message->data.value == NULL || message->data.size < 2) return true;
     const uint8_t *wire = (const uint8_t *)message->data.value;
     const size_t len = wire[0];
