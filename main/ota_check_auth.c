@@ -23,6 +23,7 @@
 #define OTA_SEC_PROVISIONED_STATE 3u
 
 #define OTA_CHECK_NAMESPACE "ota_check"
+#define OTA_CHECK_CONTEXT_KEY "context_v1"
 #define OTA_CHECK_GRANT_KEY "grant_v1"
 #define OTA_CHECK_GRANT_MAGIC 0x4f434731u
 
@@ -108,21 +109,62 @@ static esp_err_t base64url_encode(const uint8_t *input, size_t input_len,
     return ESP_OK;
 }
 
-static esp_err_t load_persisted_context(ota_secure_state_nvs_t *out)
+static bool valid_context(const ota_secure_state_nvs_t *ctx)
+{
+    return ctx != NULL && ctx->magic == OTA_SEC_STATE_MAGIC &&
+           ctx->state == OTA_SEC_PROVISIONED_STATE && ctx->counter > 0;
+}
+
+static esp_err_t read_context_blob(const char *ns, const char *key, ota_secure_state_nvs_t *out)
 {
     if (out == NULL) return ESP_ERR_INVALID_ARG;
     memset(out, 0, sizeof(*out));
     nvs_handle_t h;
-    esp_err_t err = nvs_open(OTA_SEC_NAMESPACE, NVS_READONLY, &h);
+    esp_err_t err = nvs_open(ns, NVS_READONLY, &h);
     if (err != ESP_OK) return err;
     size_t size = sizeof(*out);
-    err = nvs_get_blob(h, OTA_SEC_STATE_KEY, out, &size);
+    err = nvs_get_blob(h, key, out, &size);
     nvs_close(h);
-    if (err != ESP_OK || size != sizeof(*out) || out->magic != OTA_SEC_STATE_MAGIC ||
-        out->state != OTA_SEC_PROVISIONED_STATE || out->counter == 0) {
+    if (err != ESP_OK || size != sizeof(*out) || !valid_context(out)) {
         memset(out, 0, sizeof(*out));
         return err == ESP_OK ? ESP_ERR_INVALID_STATE : err;
     }
+    return ESP_OK;
+}
+
+static esp_err_t persist_context(const ota_secure_state_nvs_t *ctx)
+{
+    if (!valid_context(ctx)) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t h;
+    ESP_RETURN_ON_ERROR(nvs_open(OTA_CHECK_NAMESPACE, NVS_READWRITE, &h), TAG, "open context NVS failed");
+    esp_err_t err = nvs_set_blob(h, OTA_CHECK_CONTEXT_KEY, ctx, sizeof(*ctx));
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return err;
+}
+
+esp_err_t ota_check_auth_snapshot_provisioning_context(void)
+{
+    ota_secure_state_nvs_t ctx;
+    ESP_RETURN_ON_ERROR(read_context_blob(OTA_SEC_NAMESPACE, OTA_SEC_STATE_KEY, &ctx),
+                        TAG, "successful provisioning context missing");
+    esp_err_t err = persist_context(&ctx);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "durable OTA context stored counter=%llu", (unsigned long long)ctx.counter);
+    }
+    memset(&ctx, 0, sizeof(ctx));
+    return err;
+}
+
+static esp_err_t load_persisted_context(ota_secure_state_nvs_t *out)
+{
+    esp_err_t err = read_context_blob(OTA_CHECK_NAMESPACE, OTA_CHECK_CONTEXT_KEY, out);
+    if (err == ESP_OK) return ESP_OK;
+
+    err = read_context_blob(OTA_SEC_NAMESPACE, OTA_SEC_STATE_KEY, out);
+    if (err != ESP_OK) return err;
+    ESP_LOGW(TAG, "OTA durable context missing; recovering it from last provisioning state");
+    (void)persist_context(out);
     return ESP_OK;
 }
 
