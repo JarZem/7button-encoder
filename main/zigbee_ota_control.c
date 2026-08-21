@@ -2,6 +2,7 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_zigbee_attribute.h"
 #include "esp_zigbee_cluster.h"
 #include "esp_zigbee_core.h"
 #include "freertos/FreeRTOS.h"
@@ -40,8 +41,10 @@ static void report_attr(uint16_t cluster_id, uint16_t attr_id)
         },
         .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
         .clusterID = cluster_id,
+        .manuf_specific = 1,
         .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI,
         .dis_default_resp = 1,
+        .manuf_code = ZIGBEE_OTA_CONTROL_MANUFACTURER_CODE,
         .attributeID = attr_id,
     };
 
@@ -49,26 +52,27 @@ static void report_attr(uint16_t cluster_id, uint16_t attr_id)
     esp_err_t err = esp_zb_zcl_report_attr_cmd_req(&cmd);
     esp_zb_lock_release();
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "report failed cluster=0x%04x attr=0x%04x: %s",
-                 cluster_id, attr_id, esp_err_to_name(err));
+        ESP_LOGW(TAG, "report failed cluster=0x%04x attr=0x%04x manuf=0x%04x: %s",
+                 cluster_id, attr_id, ZIGBEE_OTA_CONTROL_MANUFACTURER_CODE, esp_err_to_name(err));
     }
 }
 
-static void set_attr_locked(uint16_t cluster_id, uint16_t attr_id, void *value)
+static void set_manufacturer_attr_locked(uint16_t cluster_id, uint16_t attr_id, void *value)
 {
     if (!s_endpoint_registered) return;
     esp_zb_lock_acquire(portMAX_DELAY);
-    esp_zb_zcl_status_t st = esp_zb_zcl_set_attribute_val(
+    esp_zb_zcl_status_t st = esp_zb_zcl_set_manufacturer_attribute_val(
         ZIGBEE_OTA_CONTROL_ENDPOINT,
         cluster_id,
         ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ZIGBEE_OTA_CONTROL_MANUFACTURER_CODE,
         attr_id,
         value,
         false);
     esp_zb_lock_release();
     if (st != ESP_ZB_ZCL_STATUS_SUCCESS) {
-        ESP_LOGW(TAG, "set attr failed cluster=0x%04x attr=0x%04x status=0x%x",
-                 cluster_id, attr_id, st);
+        ESP_LOGW(TAG, "set manufacturer attr failed cluster=0x%04x attr=0x%04x manuf=0x%04x status=0x%x",
+                 cluster_id, attr_id, ZIGBEE_OTA_CONTROL_MANUFACTURER_CODE, st);
     }
 }
 
@@ -76,7 +80,7 @@ void zigbee_ota_control_set_status(zigbee_ota_status_t status)
 {
     if (s_status == (uint8_t)status) return;
     s_status = (uint8_t)status;
-    set_attr_locked(ZIGBEE_OTA_STATUS_CLUSTER_ID, ZIGBEE_OTA_STATUS_ATTR_ID, &s_status);
+    set_manufacturer_attr_locked(ZIGBEE_OTA_STATUS_CLUSTER_ID, ZIGBEE_OTA_STATUS_ATTR_ID, &s_status);
     ESP_LOGI(TAG, "OTA Status=%u", (unsigned)s_status);
     report_attr(ZIGBEE_OTA_STATUS_CLUSTER_ID, ZIGBEE_OTA_STATUS_ATTR_ID);
 }
@@ -226,18 +230,11 @@ bool zigbee_ota_control_handle_set_attr(const esp_zb_zcl_set_attr_value_message_
         return true;
     }
 
+    /* The ZCL stack has already applied the manufacturer-specific write before this callback.
+     * The registered attribute backing storage is s_enable_ota, so do not write it a second
+     * time through the non-manufacturer API. */
     const bool enabled = *(bool *)message->attribute.data.value;
     s_enable_ota = enabled;
-    esp_zb_zcl_status_t st = esp_zb_zcl_set_attribute_val(
-        ZIGBEE_OTA_CONTROL_ENDPOINT,
-        ZIGBEE_OTA_ENABLE_CLUSTER_ID,
-        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        ZIGBEE_OTA_ENABLE_ATTR_ID,
-        &s_enable_ota,
-        false);
-    if (st != ESP_ZB_ZCL_STATUS_SUCCESS) {
-        ESP_LOGW(TAG, "Enable OTA attr update failed status=0x%x", st);
-    }
 
     ESP_LOGI(TAG, "Enable OTA=%u", s_enable_ota ? 1U : 0U);
     if (xTaskCreate(apply_enable_task, "ota_enable", 3072, (void *)(uintptr_t)(enabled ? 1U : 0U), 5, NULL) != pdPASS) {
