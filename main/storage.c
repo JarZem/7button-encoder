@@ -10,7 +10,6 @@
 
 #define STORAGE_NAMESPACE "remote"
 #define SAVE_DELAY_US     (5 * 1000 * 1000)
-#define OTA_CONFIG_KEY    "ota_cfg"
 
 static const char *TAG = "storage";
 static esp_timer_handle_t s_save_timer;
@@ -28,21 +27,11 @@ static void save_timer_callback(void *arg)
     }
 
     err = nvs_set_u8(handle, "switches", s_pending_state.switches);
-    if (err == ESP_OK) {
-        err = nvs_set_u8(handle, "last", s_pending_state.last_active_switches);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(handle, "bright", s_pending_state.brightness);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u16(handle, "temp", s_pending_state.white_temperature);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(handle, "rs232", s_pending_state.rs232_enabled ? 1 : 0);
-    }
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
+    if (err == ESP_OK) err = nvs_set_u8(handle, "last", s_pending_state.last_active_switches);
+    if (err == ESP_OK) err = nvs_set_u8(handle, "bright", s_pending_state.brightness);
+    if (err == ESP_OK) err = nvs_set_u16(handle, "temp", s_pending_state.white_temperature);
+    if (err == ESP_OK) err = nvs_set_u8(handle, "rs232", s_pending_state.rs232_enabled ? 1 : 0);
+    if (err == ESP_OK) err = nvs_commit(handle);
 
     nvs_close(handle);
 
@@ -69,9 +58,7 @@ void storage_init(void)
 
 void storage_load(device_state_t *state)
 {
-    if (state == NULL) {
-        return;
-    }
+    if (state == NULL) return;
 
     nvs_handle_t handle = 0;
     esp_err_t err = nvs_open(STORAGE_NAMESPACE, NVS_READONLY, &handle);
@@ -86,31 +73,18 @@ void storage_load(device_state_t *state)
 
     uint8_t value_u8;
     uint16_t value_u16;
-
-    if (nvs_get_u8(handle, "switches", &value_u8) == ESP_OK) {
-        state->switches = value_u8;
-    }
-    if (nvs_get_u8(handle, "last", &value_u8) == ESP_OK) {
-        state->last_active_switches = value_u8;
-    }
-    if (nvs_get_u8(handle, "bright", &value_u8) == ESP_OK) {
-        state->brightness = value_u8;
-    }
-    if (nvs_get_u16(handle, "temp", &value_u16) == ESP_OK) {
-        state->white_temperature = value_u16;
-    }
-    if (nvs_get_u8(handle, "rs232", &value_u8) == ESP_OK) {
-        state->rs232_enabled = value_u8 != 0;
-    }
+    if (nvs_get_u8(handle, "switches", &value_u8) == ESP_OK) state->switches = value_u8;
+    if (nvs_get_u8(handle, "last", &value_u8) == ESP_OK) state->last_active_switches = value_u8;
+    if (nvs_get_u8(handle, "bright", &value_u8) == ESP_OK) state->brightness = value_u8;
+    if (nvs_get_u16(handle, "temp", &value_u16) == ESP_OK) state->white_temperature = value_u16;
+    if (nvs_get_u8(handle, "rs232", &value_u8) == ESP_OK) state->rs232_enabled = value_u8 != 0;
 
     nvs_close(handle);
 }
 
 void storage_schedule_save(const device_state_t *state)
 {
-    if (state == NULL || s_save_timer == NULL) {
-        return;
-    }
+    if (state == NULL || s_save_timer == NULL) return;
 
     memcpy(&s_pending_state, state, sizeof(s_pending_state));
     esp_err_t err = esp_timer_stop(s_save_timer);
@@ -122,9 +96,7 @@ void storage_schedule_save(const device_state_t *state)
 
 bool storage_load_zigbee_last_channel(uint8_t *channel)
 {
-    if (channel == NULL) {
-        return false;
-    }
+    if (channel == NULL) return false;
 
     nvs_handle_t handle = 0;
     esp_err_t err = nvs_open(STORAGE_NAMESPACE, NVS_READONLY, &handle);
@@ -136,7 +108,6 @@ bool storage_load_zigbee_last_channel(uint8_t *channel)
     uint8_t value = 0;
     err = nvs_get_u8(handle, "zb_ch", &value);
     nvs_close(handle);
-
     if (err != ESP_OK) {
         ESP_LOGI(TAG, "Zigbee last channel not stored yet: %s", esp_err_to_name(err));
         return false;
@@ -156,83 +127,13 @@ void storage_save_zigbee_last_channel(uint8_t channel)
 
     nvs_handle_t handle = 0;
     esp_err_t err = nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &handle);
-    if (err == ESP_OK) {
-        err = nvs_set_u8(handle, "zb_ch", channel);
-    }
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
-    if (handle != 0) {
-        nvs_close(handle);
-    }
+    if (err == ESP_OK) err = nvs_set_u8(handle, "zb_ch", channel);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    if (handle != 0) nvs_close(handle);
 
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Zigbee last channel save failed: %s", esp_err_to_name(err));
     } else {
         ESP_LOGI(TAG, "Zigbee last successful channel saved to NVS: %u", channel);
     }
-}
-
-bool storage_load_ota_config(ota_config_t *config)
-{
-    if (config == NULL) {
-        return false;
-    }
-
-    nvs_handle_t handle = 0;
-    esp_err_t err = nvs_open(STORAGE_NAMESPACE, NVS_READONLY, &handle);
-    if (err != ESP_OK) {
-        ESP_LOGI(TAG, "OTA provisioning config not loaded: %s", esp_err_to_name(err));
-        return false;
-    }
-
-    size_t size = sizeof(*config);
-    err = nvs_get_blob(handle, OTA_CONFIG_KEY, config, &size);
-    nvs_close(handle);
-
-    if (err != ESP_OK || size != sizeof(*config)) {
-        ESP_LOGI(TAG, "OTA provisioning config missing or invalid: %s size=%u",
-                 esp_err_to_name(err),
-                 (unsigned)size);
-        ota_config_clear(config);
-        return false;
-    }
-
-    ESP_LOGI(TAG, "OTA provisioning config loaded from NVS: ssid=%s host=%s code=%s token_len=%u",
-             config->ssid,
-             config->host,
-             config->code,
-             (unsigned)strlen(config->token));
-    return true;
-}
-
-bool storage_save_ota_config(const ota_config_t *config)
-{
-    if (config == NULL) {
-        return false;
-    }
-
-    nvs_handle_t handle = 0;
-    esp_err_t err = nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &handle);
-    if (err == ESP_OK) {
-        err = nvs_set_blob(handle, OTA_CONFIG_KEY, config, sizeof(*config));
-    }
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
-    if (handle != 0) {
-        nvs_close(handle);
-    }
-
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "OTA provisioning config save failed: %s", esp_err_to_name(err));
-        return false;
-    }
-
-    ESP_LOGI(TAG, "OTA provisioning config saved to NVS: ssid=%s host=%s code=%s token_len=%u",
-             config->ssid,
-             config->host,
-             config->code,
-             (unsigned)strlen(config->token));
-    return true;
 }
