@@ -122,6 +122,24 @@ static void ota_status_monitor_task(void *arg)
     }
 }
 
+static void apply_enable_task(void *arg)
+{
+    const bool enabled = (uintptr_t)arg != 0;
+    vTaskDelay(pdMS_TO_TICKS(10));
+    if (enabled != s_enable_ota) {
+        vTaskDelete(NULL);
+        return;
+    }
+    if (enabled) {
+        zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_PROVISIONING_STARTED);
+        zigbee_ota_schedule_hello(0);
+    } else {
+        ota_secure_session_reset_for_retry();
+        zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_IDLE);
+    }
+    vTaskDelete(NULL);
+}
+
 esp_err_t zigbee_ota_control_add_endpoint(esp_zb_ep_list_t *ep_list)
 {
     ESP_RETURN_ON_FALSE(ep_list != NULL, ESP_ERR_INVALID_ARG, TAG, "ep_list is NULL");
@@ -222,12 +240,8 @@ bool zigbee_ota_control_handle_set_attr(const esp_zb_zcl_set_attr_value_message_
     }
 
     ESP_LOGI(TAG, "Enable OTA=%u", s_enable_ota ? 1U : 0U);
-    if (s_enable_ota) {
-        zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_PROVISIONING_STARTED);
-        zigbee_ota_schedule_hello(0);
-    } else {
-        ota_secure_session_reset_for_retry();
-        zigbee_ota_control_set_status(ZIGBEE_OTA_STATUS_IDLE);
+    if (xTaskCreate(apply_enable_task, "ota_enable", 3072, (void *)(uintptr_t)(enabled ? 1U : 0U), 5, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "Enable OTA apply task creation failed");
     }
     return true;
 }
