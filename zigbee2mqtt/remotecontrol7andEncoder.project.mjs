@@ -30,17 +30,27 @@ const remoteFromColorTemperature={cluster:'lightingColorCtrl',type:['attributeRe
 
 const remoteToOnOff={key:['state','state_button1','state_button2','state_button3','state_button4','state_button5','state_button6','state_button7','state_light','state_enable_rs232'],convertSet:async(entity,key,value,meta)=>{
     const name=endpointNameFromStateKey(key,entity,meta);
+    const endpoint=endpointForName(entity,meta,name);
     const state=String(value).toUpperCase();
     const cmd=state==='ON'?'on':state==='OFF'?'off':'toggle';
-    await endpointForName(entity,meta,name).command('genOnOff',cmd,{}, {disableDefaultResponse:false});
-},convertGet:async(entity)=>{await entity.read('genOnOff',['onOff']);}};
+    await endpoint.command('genOnOff',cmd,{}, {disableDefaultResponse:false});
+    if(state==='ON'||state==='OFF')return{state:{[`state_${name}`]:state}};
+    return{state:{}};
+},convertGet:async(entity,key,meta)=>{
+    const name=endpointNameFromStateKey(key,entity,meta);
+    await endpointForName(entity,meta,name).read('genOnOff',['onOff']);
+}};
 
 const remoteToBrightness={key:['brightness','brightness_light'],convertSet:async(entity,key,value,meta)=>{
-    await lightEndpoint(entity,meta).command('genLevelCtrl','moveToLevel',{level:clampNumber(value,0,254),transtime:0},{disableDefaultResponse:false});
+    const level=clampNumber(value,0,254);
+    await lightEndpoint(entity,meta).command('genLevelCtrl','moveToLevel',{level,transtime:0},{disableDefaultResponse:false});
+    return{state:{brightness_light:level}};
 },convertGet:async(entity,key,meta)=>{await lightEndpoint(entity,meta).read('genLevelCtrl',['currentLevel']);}};
 
 const remoteToColorTemperature={key:['color_temp','color_temp_light'],convertSet:async(entity,key,value,meta)=>{
-    await lightEndpoint(entity,meta).command('lightingColorCtrl','moveToColorTemp',{colortemp:clampNumber(value,COLOR_TEMP_MIN_MIRED,COLOR_TEMP_MAX_MIRED),transtime:0},{disableDefaultResponse:false});
+    const colorTemp=clampNumber(value,COLOR_TEMP_MIN_MIRED,COLOR_TEMP_MAX_MIRED);
+    await lightEndpoint(entity,meta).command('lightingColorCtrl','moveToColorTemp',{colortemp:colorTemp,transtime:0},{disableDefaultResponse:false});
+    return{state:{color_temp_light:colorTemp,color_mode_light:'color_temp'}};
 },convertGet:async(entity,key,meta)=>{await lightEndpoint(entity,meta).read('lightingColorCtrl',['colorTemperature','colorMode']);}};
 
 const definition={
