@@ -1,4 +1,4 @@
-import {presets as e} from 'zigbee-herdsman-converters/lib/exposes';
+import {presets as e, access as ea} from 'zigbee-herdsman-converters/lib/exposes';
 
 const ENDPOINTS={button1:1,button2:2,button3:3,button4:4,button5:5,button6:6,button7:7,light:8,enable_rs232:9};
 const APPLICATION_ENDPOINTS=[1,2,3,4,5,6,8,9];
@@ -110,7 +110,8 @@ const definition={
     exposes:[
         e.switch().withEndpoint('button1'),e.switch().withEndpoint('button2'),e.switch().withEndpoint('button3'),
         e.switch().withEndpoint('button4'),e.switch().withEndpoint('button5'),e.switch().withEndpoint('button6'),
-        e.light().removeFeature('state').withBrightness().withColorTemp([COLOR_TEMP_MIN_MIRED,COLOR_TEMP_MAX_MIRED]).withEndpoint('light'),
+        e.numeric('brightness',ea.ALL).withValueMin(0).withValueMax(254).withEndpoint('light'),
+        e.numeric('color_temp',ea.ALL).withValueMin(COLOR_TEMP_MIN_MIRED).withValueMax(COLOR_TEMP_MAX_MIRED).withEndpoint('light'),
         e.switch().withEndpoint('enable_rs232'),
     ],
     endpoint:()=>ENDPOINTS,
