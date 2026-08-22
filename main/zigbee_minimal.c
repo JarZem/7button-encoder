@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha/esp_zigbee_ha_standard.h"
+#include "jarzem_secure_ota.h"
 #include "nwk/esp_zigbee_nwk.h"
 #include "status_led.h"
 #include "storage.h"
@@ -319,7 +320,7 @@ static esp_err_t add_basic_identity(esp_zb_ep_list_t *ep_list, uint8_t endpoint)
     ESP_RETURN_ON_ERROR(esp_zb_basic_cluster_add_attr(
         basic, ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, manufacturer), TAG, "manufacturer attr failed");
     ESP_RETURN_ON_ERROR(esp_zb_basic_cluster_add_attr(
-        basic, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, model), TAG, "model attr failed");
+        basic, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, model), TAG, "model failed");
     return esp_zb_basic_cluster_add_attr(basic, ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID, sw);
 }
 
@@ -474,18 +475,18 @@ static void zigbee_task(void *arg)
         ESP_ERROR_CHECK(add_basic_identity(ep_list, endpoint));
     }
 
-    /* OTA endpoints 10/11 are injected here transparently by the OTA submodule. */
-    ESP_ERROR_CHECK(esp_zb_device_register(ep_list));
+    ESP_LOGI(TAG, "registering application endpoints 1..9 plus OTA endpoints 10/11");
+    ESP_ERROR_CHECK(jarzem_ota_device_register(ep_list));
     ESP_ERROR_CHECK(esp_zb_zcl_add_privilege_command(
         ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
         ESP_ZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_COLOR_TEMPERATURE));
-    esp_zb_core_action_handler_register(action_handler);
+    jarzem_ota_action_handler_register(action_handler);
 
     esp_zb_set_rx_on_when_idle(true);
     apply_channel_mask(channel_mask(s_fast_pair_channel), "initial");
     ESP_ERROR_CHECK(esp_zb_start(false));
     s_stack_started = true;
-    ESP_LOGI(TAG, "application endpoints 1..9 registered; OTA is provided by external module");
+    ESP_LOGI(TAG, "application endpoints 1..9 + OTA endpoints 10/11 registered");
     esp_zb_stack_main_loop();
 }
 
