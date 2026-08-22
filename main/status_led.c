@@ -7,6 +7,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
+#include "freertos/semphr.h"
 #include "led_strip.h"
 #include "led_strip_rmt.h"
 #include "ota_service.h"
@@ -16,6 +17,7 @@
 #define STATUS_LED_TIMER_MS           100
 #define STATUS_LED_RMT_RESOLUTION_HZ  10000000
 #define STATUS_LED_PULSE_TICKS        2
+#define STATUS_LED_PROVISION_TICKS    6
 #define STATUS_LED_HEARTBEAT_TICKS    100
 
 typedef struct {
@@ -49,6 +51,7 @@ static const led_color_t COLOR_MAGENTA = {28, 0, 18};
 
 static led_strip_handle_t s_strip;
 static esp_timer_handle_t s_timer;
+static SemaphoreHandle_t s_rmt_mutex;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_initialized;
 static bool s_joined;
@@ -62,9 +65,17 @@ static uint32_t s_tick;
 
 static void set_pixel(led_color_t color)
 {
-    if (s_strip == NULL) return;
-    (void)led_strip_set_pixel(s_strip, 0, color.red, color.green, color.blue);
-    (void)led_strip_refresh(s_strip);
+    if (s_strip == NULL || s_rmt_mutex == NULL) return;
+    if (xSemaphoreTake(s_rmt_mutex, portMAX_DELAY) != pdTRUE) return;
+
+    esp_err_t err = led_strip_set_pixel(s_strip, 0, color.red, color.green, color.blue);
+    if (err == ESP_OK) err = led_strip_refresh(s_strip);
+
+    xSemaphoreGive(s_rmt_mutex);
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Status LED RMT update failed: %s", esp_err_to_name(err));
+    }
 }
 
 static led_color_t ota_color_for_state(ota_state_t state)
@@ -102,6 +113,11 @@ static led_color_t pulse_color(pulse_kind_t pulse)
         default:
             return COLOR_OFF;
     }
+}
+
+static uint8_t pulse_ticks_for_kind(pulse_kind_t pulse)
+{
+    return pulse == PULSE_PROVISION_MAGENTA ? STATUS_LED_PROVISION_TICKS : STATUS_LED_PULSE_TICKS;
 }
 
 static void timer_cb(void *arg)
@@ -164,7 +180,7 @@ static void start_pulse(pulse_kind_t pulse)
 {
     portENTER_CRITICAL(&s_lock);
     s_pulse = pulse;
-    s_pulse_ticks = STATUS_LED_PULSE_TICKS;
+    s_pulse_ticks = pulse_ticks_for_kind(pulse);
     s_ha_publish_step = pulse == PULSE_HA_PUBLISH_GREEN ? 1 : 0;
     portEXIT_CRITICAL(&s_lock);
     set_pixel(pulse_color(pulse));
@@ -173,6 +189,12 @@ static void start_pulse(pulse_kind_t pulse)
 void status_led_init(void)
 {
     if (s_initialized) return;
+
+    s_rmt_mutex = xSemaphoreCreateMutex();
+    if (s_rmt_mutex == NULL) {
+        ESP_LOGW(TAG, "Status LED mutex allocation failed");
+        return;
+    }
 
     led_strip_config_t strip_config = {
         .strip_gpio_num = PIN_STATUS_LED,
@@ -196,9 +218,9 @@ void status_led_init(void)
     if (err != ESP_OK) { ESP_LOGW(TAG, "Status LED timer failed: %s", esp_err_to_name(err)); return; }
 
     set_pixel(COLOR_OFF);
-    ESP_ERROR_CHECK(esp_timer_start_periodic(s_timer, STATUS_LED_TIMER_MS * 1000ULL));
     s_initialized = true;
-    ESP_LOGI(TAG, "Status LED active on GPIO%d", PIN_STATUS_LED);
+    ESP_ERROR_CHECK(esp_timer_start_periodic(s_timer, STATUS_LED_TIMER_MS * 1000ULL));
+    ESP_LOGI(TAG, "Status LED active on GPIO%d; serialized RMT enabled", PIN_STATUS_LED);
 }
 
 void status_led_indicate_boot(void) { start_pulse(PULSE_BOOT_YELLOW); }
