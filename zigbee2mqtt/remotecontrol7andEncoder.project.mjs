@@ -6,6 +6,7 @@ const COLOR_TEMP_MIN_MIRED=154,COLOR_TEMP_MAX_MIRED=333;
 const READBACK_DELAY_MS=120;
 const STALE_REPORT_GUARD_MS=800;
 const pendingOnOff=new Map();
+const pendingBrightness=new Map();
 
 const endpointNameById=(id)=>Object.entries(ENDPOINTS).find(([,v])=>v===id)?.[0];
 const clampNumber=(value,min,max)=>Math.min(max,Math.max(min,Math.round(Number(value)||min)));
@@ -13,7 +14,9 @@ const lightEndpoint=(entity,meta)=>meta?.device?.getEndpoint(ENDPOINTS.light)??e
 const endpointNameFromStateKey=(key,entity,meta)=>typeof key==='string'&&key.startsWith('state_')?key.slice(6):(meta?.endpoint_name??endpointNameById(entity.ID));
 const endpointForName=(entity,meta,name)=>ENDPOINTS[name]===undefined?entity:(meta?.device?.getEndpoint(ENDPOINTS[name])??entity);
 const delay=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));
-const deviceKey=(msgOrMeta,endpointId)=>`${msgOrMeta?.device?.ieeeAddr??msgOrMeta?.meta?.device?.ieeeAddr??'unknown'}:${endpointId}`;
+const levelToPercent=(level)=>Math.floor((clampNumber(level,0,254)*100+127)/254);
+const percentToLevel=(percent)=>Math.floor((clampNumber(percent,0,100)*254+50)/100);
+const representableBrightness=(level)=>percentToLevel(levelToPercent(level));
 
 const remoteFromOnOff={cluster:'genOnOff',type:['attributeReport','readResponse'],convert:(model,msg)=>{
     if(msg.data.onOff===undefined)return;
@@ -27,9 +30,6 @@ const remoteFromOnOff={cluster:'genOnOff',type:['attributeReport','readResponse'
         if(expired){
             pendingOnOff.delete(key);
         }else if(msg.type==='attributeReport'&&state!==pending.expected){
-            // ESP may still have an already queued report with the previous value.
-            // Ignore only that contradictory report during the short SET guard.
-            // readResponse remains authoritative and will expose a real failed write.
             return;
         }else{
             pendingOnOff.delete(key);
@@ -38,8 +38,23 @@ const remoteFromOnOff={cluster:'genOnOff',type:['attributeReport','readResponse'
     return{[`state_${name}`]:state};
 }};
 
-const remoteFromBrightness={cluster:'genLevelCtrl',type:['attributeReport','readResponse'],convert:(model,msg)=>
-    msg.endpoint.ID===ENDPOINTS.light&&msg.data.currentLevel!==undefined?{brightness_light:msg.data.currentLevel}:undefined};
+const remoteFromBrightness={cluster:'genLevelCtrl',type:['attributeReport','readResponse'],convert:(model,msg)=>{
+    if(msg.endpoint.ID!==ENDPOINTS.light||msg.data.currentLevel===undefined)return;
+    const level=Number(msg.data.currentLevel);
+    const key=`${msg.device?.ieeeAddr??'unknown'}:${msg.endpoint.ID}`;
+    const pending=pendingBrightness.get(key);
+    if(pending){
+        const expired=Date.now()>pending.until;
+        if(expired){
+            pendingBrightness.delete(key);
+        }else if(msg.type==='attributeReport'&&level!==pending.expected){
+            return;
+        }else{
+            pendingBrightness.delete(key);
+        }
+    }
+    return{brightness_light:level};
+}};
 
 const remoteFromColorTemperature={cluster:'lightingColorCtrl',type:['attributeReport','readResponse'],convert:(model,msg)=>{
     if(msg.endpoint.ID!==ENDPOINTS.light)return;
@@ -65,8 +80,9 @@ const remoteToOnOff={key:['state','state_button1','state_button2','state_button3
 }};
 
 const remoteToBrightness={key:['brightness','brightness_light'],convertSet:async(entity,key,value,meta)=>{
-    const level=clampNumber(value,0,254);
+    const level=representableBrightness(value);
     const endpoint=lightEndpoint(entity,meta);
+    pendingBrightness.set(`${meta?.device?.ieeeAddr??'unknown'}:${endpoint.ID}`,{expected:level,until:Date.now()+STALE_REPORT_GUARD_MS});
     await endpoint.command('genLevelCtrl','moveToLevel',{level,transtime:0},{disableDefaultResponse:false});
     await delay(READBACK_DELAY_MS);
     await endpoint.read('genLevelCtrl',['currentLevel']);
