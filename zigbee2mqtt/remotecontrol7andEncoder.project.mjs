@@ -21,7 +21,7 @@ const representableBrightness=(level)=>percentToLevel(levelToPercent(level));
 const remoteFromOnOff={cluster:'genOnOff',type:['attributeReport','readResponse'],convert:(model,msg)=>{
     if(msg.data.onOff===undefined)return;
     const name=endpointNameById(msg.endpoint.ID);
-    if(!name)return;
+    if(!name||name==='light')return;
     const state=msg.data.onOff?'ON':'OFF';
     const key=`${msg.device?.ieeeAddr??'unknown'}:${msg.endpoint.ID}`;
     const pending=pendingOnOff.get(key);
@@ -29,9 +29,9 @@ const remoteFromOnOff={cluster:'genOnOff',type:['attributeReport','readResponse'
         const expired=Date.now()>pending.until;
         if(expired){
             pendingOnOff.delete(key);
-        }else if(msg.type==='attributeReport'&&state!==pending.expected){
-            return;
-        }else{
+        }else if(msg.type==='attributeReport'){
+            if(state!==pending.expected)return;
+        }else if(msg.type==='readResponse'){
             pendingOnOff.delete(key);
         }
     }
@@ -47,9 +47,9 @@ const remoteFromBrightness={cluster:'genLevelCtrl',type:['attributeReport','read
         const expired=Date.now()>pending.until;
         if(expired){
             pendingBrightness.delete(key);
-        }else if(msg.type==='attributeReport'&&level!==pending.expected){
-            return;
-        }else{
+        }else if(msg.type==='attributeReport'){
+            if(level!==pending.expected)return;
+        }else if(msg.type==='readResponse'){
             pendingBrightness.delete(key);
         }
     }
@@ -64,7 +64,7 @@ const remoteFromColorTemperature={cluster:'lightingColorCtrl',type:['attributeRe
     return Object.keys(result).length?result:undefined;
 }};
 
-const remoteToOnOff={key:['state','state_button1','state_button2','state_button3','state_button4','state_button5','state_button6','state_button7','state_light','state_enable_rs232'],convertSet:async(entity,key,value,meta)=>{
+const remoteToOnOff={key:['state','state_button1','state_button2','state_button3','state_button4','state_button5','state_button6','state_button7','state_enable_rs232'],convertSet:async(entity,key,value,meta)=>{
     const name=endpointNameFromStateKey(key,entity,meta);
     const endpoint=endpointForName(entity,meta,name);
     const state=String(value).toUpperCase();
@@ -109,7 +109,7 @@ const definition={
         e.switch().withEndpoint('button1'),e.switch().withEndpoint('button2'),e.switch().withEndpoint('button3'),
         e.switch().withEndpoint('button4'),e.switch().withEndpoint('button5'),e.switch().withEndpoint('button6'),
         e.switch().withEndpoint('button7'),
-        e.light().withBrightness().withColorTemp([COLOR_TEMP_MIN_MIRED,COLOR_TEMP_MAX_MIRED]).withEndpoint('light'),
+        e.light().removeFeature('state').withBrightness().withColorTemp([COLOR_TEMP_MIN_MIRED,COLOR_TEMP_MAX_MIRED]).withEndpoint('light'),
         e.switch().withEndpoint('enable_rs232'),
     ],
     endpoint:()=>ENDPOINTS,
