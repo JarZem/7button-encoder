@@ -3,12 +3,14 @@ import {presets as e} from 'zigbee-herdsman-converters/lib/exposes';
 const ENDPOINTS={button1:1,button2:2,button3:3,button4:4,button5:5,button6:6,button7:7,light:8,enable_rs232:9};
 const APPLICATION_ENDPOINTS=[1,2,3,4,5,6,7,8,9];
 const COLOR_TEMP_MIN_MIRED=154,COLOR_TEMP_MAX_MIRED=333;
+const READBACK_DELAY_MS=120;
 
 const endpointNameById=(id)=>Object.entries(ENDPOINTS).find(([,v])=>v===id)?.[0];
 const clampNumber=(value,min,max)=>Math.min(max,Math.max(min,Math.round(Number(value)||min)));
 const lightEndpoint=(entity,meta)=>meta?.device?.getEndpoint(ENDPOINTS.light)??entity;
 const endpointNameFromStateKey=(key,entity,meta)=>typeof key==='string'&&key.startsWith('state_')?key.slice(6):(meta?.endpoint_name??endpointNameById(entity.ID));
 const endpointForName=(entity,meta,name)=>ENDPOINTS[name]===undefined?entity:(meta?.device?.getEndpoint(ENDPOINTS[name])??entity);
+const delay=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));
 
 const remoteFromOnOff={cluster:'genOnOff',type:['attributeReport','readResponse'],convert:(model,msg)=>{
     if(msg.data.onOff===undefined)return;
@@ -34,7 +36,11 @@ const remoteToOnOff={key:['state','state_button1','state_button2','state_button3
     const state=String(value).toUpperCase();
     const cmd=state==='ON'?'on':state==='OFF'?'off':'toggle';
     await endpoint.command('genOnOff',cmd,{}, {disableDefaultResponse:false});
-    if(state==='ON'||state==='OFF')return{state:{[`state_${name}`]:state}};
+    // Do not publish an optimistic state. HA must follow the value actually
+    // reported/read back from the ESP, otherwise a delayed old report can make
+    // the UI jump back and leave it out of sync with the device.
+    await delay(READBACK_DELAY_MS);
+    await endpoint.read('genOnOff',['onOff']);
     return{state:{}};
 },convertGet:async(entity,key,meta)=>{
     const name=endpointNameFromStateKey(key,entity,meta);
@@ -43,14 +49,20 @@ const remoteToOnOff={key:['state','state_button1','state_button2','state_button3
 
 const remoteToBrightness={key:['brightness','brightness_light'],convertSet:async(entity,key,value,meta)=>{
     const level=clampNumber(value,0,254);
-    await lightEndpoint(entity,meta).command('genLevelCtrl','moveToLevel',{level,transtime:0},{disableDefaultResponse:false});
-    return{state:{brightness_light:level}};
+    const endpoint=lightEndpoint(entity,meta);
+    await endpoint.command('genLevelCtrl','moveToLevel',{level,transtime:0},{disableDefaultResponse:false});
+    await delay(READBACK_DELAY_MS);
+    await endpoint.read('genLevelCtrl',['currentLevel']);
+    return{state:{}};
 },convertGet:async(entity,key,meta)=>{await lightEndpoint(entity,meta).read('genLevelCtrl',['currentLevel']);}};
 
 const remoteToColorTemperature={key:['color_temp','color_temp_light'],convertSet:async(entity,key,value,meta)=>{
     const colorTemp=clampNumber(value,COLOR_TEMP_MIN_MIRED,COLOR_TEMP_MAX_MIRED);
-    await lightEndpoint(entity,meta).command('lightingColorCtrl','moveToColorTemp',{colortemp:colorTemp,transtime:0},{disableDefaultResponse:false});
-    return{state:{color_temp_light:colorTemp,color_mode_light:'color_temp'}};
+    const endpoint=lightEndpoint(entity,meta);
+    await endpoint.command('lightingColorCtrl','moveToColorTemp',{colortemp:colorTemp,transtime:0},{disableDefaultResponse:false});
+    await delay(READBACK_DELAY_MS);
+    await endpoint.read('lightingColorCtrl',['colorTemperature','colorMode']);
+    return{state:{}};
 },convertGet:async(entity,key,meta)=>{await lightEndpoint(entity,meta).read('lightingColorCtrl',['colorTemperature','colorMode']);}};
 
 const definition={
