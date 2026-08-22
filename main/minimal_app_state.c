@@ -52,7 +52,14 @@ static void log_state(const char *reason)
 
 static void commit_state_change(const char *reason)
 {
-    zigbee_minimal_apply_state(&s_state, false, false);
+    /*
+     * The state model is authoritative.  Whenever it changes, update every
+     * application endpoint and report the complete state to the coordinator.
+     * This is essential for master button 7: one command may change several
+     * switch endpoints (1..6), so reporting only the endpoint that received
+     * the command would leave Zigbee2MQTT/Home Assistant stale.
+     */
+    zigbee_minimal_apply_state(&s_state, false, true);
     storage_schedule_save(&s_state);
     log_state(reason);
 }
