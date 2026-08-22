@@ -15,6 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha/esp_zigbee_ha_standard.h"
+#include "jarzem_secure_ota.h"
 #include "nwk/esp_zigbee_nwk.h"
 #include "state.h"
 #include "status_led.h"
@@ -429,16 +430,17 @@ static void zigbee_task(void *arg)
         ESP_ERROR_CHECK(add_basic_identity(ep_list, endpoint));
     }
 
-    /* The pinned OTA submodule injects endpoints 10/11 here. */
-    ESP_ERROR_CHECK(esp_zb_device_register(ep_list));
+    ESP_LOGI(TAG, "registering application endpoints 1..9 plus OTA endpoints 10/11");
+    ESP_ERROR_CHECK(jarzem_ota_device_register(ep_list));
     ESP_ERROR_CHECK(esp_zb_zcl_add_privilege_command(
         ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
         ESP_ZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_COLOR_TEMPERATURE));
-    esp_zb_core_action_handler_register(action_handler);
+    jarzem_ota_action_handler_register(action_handler);
     esp_zb_set_rx_on_when_idle(true);
     apply_channel_mask(channel_mask(s_fast_pair_channel));
     ESP_ERROR_CHECK(esp_zb_start(false));
     s_started = true;
+    ESP_LOGI(TAG, "application endpoints 1..9 + OTA endpoints 10/11 registered");
     esp_zb_stack_main_loop();
 }
 
