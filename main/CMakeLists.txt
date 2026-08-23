@@ -19,6 +19,7 @@ if(CONFIG_APP_ZIGBEE_MINIMAL_TEST)
             espressif__led_strip
             espressif__esp-zigbee-lib
             jarzem_secure_ota
+            status_led_manager
     )
 else()
     idf_component_register(
@@ -48,5 +49,6 @@ else()
             espressif__led_strip
             espressif__esp-zigbee-lib
             jarzem_secure_ota
+            status_led_manager
     )
 endif()
