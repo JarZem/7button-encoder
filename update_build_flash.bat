@@ -3,29 +3,46 @@ setlocal
 
 cd /d "%~dp0"
 
- echo [1/5] Git pull...
+set "DO_FLASH=0"
+if /I "%~1"=="-f" set "DO_FLASH=1"
+
+if not "%~1"=="" if /I not "%~1"=="-f" (
+    echo Usage: %~nx0 [-f]
+    echo   without parameter = update + fullclean + build
+    echo   -f                = update + fullclean + build + flash monitor
+    exit /b 2
+)
+
+echo [1/4] Git pull...
 git pull
 if errorlevel 1 goto :error
 
- echo [2/5] Updating submodules...
+echo [2/4] Updating submodules...
 git submodule update --init --recursive
 if errorlevel 1 goto :error
 
- echo [3/5] ESP-IDF fullclean...
+echo [3/4] ESP-IDF fullclean...
 call idf.py fullclean
 if errorlevel 1 goto :error
 
- echo [4/5] Building firmware...
+echo [4/4] Building firmware...
 call idf.py build
 if errorlevel 1 goto :error
 
- echo [5/5] Flashing firmware...
-call idf.py flash
-if errorlevel 1 goto :error
+if "%DO_FLASH%"=="1" (
+    echo.
+    echo Flashing firmware and starting monitor...
+    call idf.py flash monitor
+    if errorlevel 1 goto :error
+)
 
- echo.
+echo.
 echo ========================================
-echo HOTOVO - update, build i flash probehly OK
+if "%DO_FLASH%"=="1" (
+    echo HOTOVO - update, build, flash a monitor probehly OK
+) else (
+    echo HOTOVO - update a build probehly OK
+)
 echo ========================================
 pause
 exit /b 0
