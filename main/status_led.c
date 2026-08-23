@@ -4,6 +4,7 @@
 #include "ota_service.h"
 #include "pins.h"
 #include "status_led_manager.h"
+#include "zigbee_ota_control.h"
 
 #define MODE_NOT_JOINED 0
 #define MODE_PAIRING    1
@@ -11,23 +12,60 @@
 #define MODE_FATAL      3
 
 static const char *TAG = "status_led";
+static uint8_t s_last_ota_status = 0xff;
+
+static void indicate_ota_status_transition(uint8_t status)
+{
+    if (status == s_last_ota_status) return;
+    const bool initial = s_last_ota_status == 0xff;
+    s_last_ota_status = status;
+    if (initial) return;
+
+    switch ((zigbee_ota_status_t)status) {
+        case ZIGBEE_OTA_STATUS_PROVISIONING_COMPLETE:
+            status_led_manager_enqueue(STATUS_LED_COLOR_BLUE, 200);
+            status_led_manager_enqueue(STATUS_LED_COLOR_GREEN, 250);
+            break;
+        case ZIGBEE_OTA_STATUS_PROVISIONING_ERROR:
+        case ZIGBEE_OTA_STATUS_PROVISIONING_TIMEOUT:
+            status_led_manager_enqueue(STATUS_LED_COLOR_BLUE, 200);
+            status_led_manager_enqueue(STATUS_LED_COLOR_RED, 300);
+            break;
+        case ZIGBEE_OTA_STATUS_FW_UPDATE_COMPLETE:
+            status_led_manager_enqueue(STATUS_LED_COLOR_GREEN, 300);
+            break;
+        case ZIGBEE_OTA_STATUS_FW_UPDATE_ERROR:
+        case ZIGBEE_OTA_STATUS_FW_VERIFY_ERROR:
+            status_led_manager_enqueue(STATUS_LED_COLOR_RED, 300);
+            break;
+        case ZIGBEE_OTA_STATUS_FW_SKIPPED:
+            status_led_manager_enqueue(STATUS_LED_COLOR_YELLOW, 250);
+            break;
+        default:
+            break;
+    }
+}
 
 static bool ota_external_state(status_led_external_state_t *state, void *ctx)
 {
     (void)ctx;
+    indicate_ota_status_transition(zigbee_ota_control_get_status());
+
     switch (ota_service_get_state()) {
+        case OTA_STATE_PENDING:
+            *state = (status_led_external_state_t){true, STATUS_LED_COLOR_ORANGE, 500, 85};
+            return true;
+        case OTA_STATE_CONNECTING_WIFI:
+            *state = (status_led_external_state_t){true, STATUS_LED_COLOR_ORANGE, 300, 85};
+            return true;
         case OTA_STATE_DOWNLOADING:
             *state = (status_led_external_state_t){true, STATUS_LED_COLOR_WHITE, 200, 90};
             return true;
         case OTA_STATE_VERIFYING:
             *state = (status_led_external_state_t){true, STATUS_LED_COLOR_BLUE, 200, 90};
             return true;
-        case OTA_STATE_FAILED:
-            *state = (status_led_external_state_t){true, STATUS_LED_COLOR_RED, 200, 95};
-            return true;
-        case OTA_STATE_PENDING:
-        case OTA_STATE_CONNECTING_WIFI:
         case OTA_STATE_SUCCESS:
+        case OTA_STATE_FAILED:
         case OTA_STATE_IDLE:
         default:
             return false;
@@ -97,6 +135,7 @@ void status_led_indicate_ha_publish(void)
     status_led_manager_enqueue(STATUS_LED_COLOR_CYAN, 150);
 }
 
+/* Provisioning traffic itself is already represented by generic RX/TX pulses. */
 void status_led_indicate_provision_step(void)
 {
 }
