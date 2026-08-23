@@ -43,6 +43,7 @@ static status_led_manager_config_t s_cfg;
 static pulse_t s_fifo[FIFO_LEN];
 static uint8_t s_head, s_count;
 static pulse_t s_current;
+static uint8_t s_gap_ticks;
 static mode_t s_modes[STATUS_LED_MODE_SLOTS];
 static uint32_t s_scheduler_tick;
 static uint16_t s_heartbeat_ticks;
@@ -111,6 +112,12 @@ static uint8_t next_nonpriority_color(void)
     uint8_t color = STATUS_LED_COLOR_OFF;
     portENTER_CRITICAL(&s_lock);
 
+    if (s_gap_ticks > 0) {
+        --s_gap_ticks;
+        portEXIT_CRITICAL(&s_lock);
+        return STATUS_LED_COLOR_OFF;
+    }
+
     if (s_current.ticks == 0 && s_count > 0) {
         s_current = s_fifo[s_head];
         s_head = (uint8_t)((s_head + 1) % FIFO_LEN);
@@ -120,6 +127,7 @@ static uint8_t next_nonpriority_color(void)
     if (s_current.ticks > 0) {
         color = s_current.color;
         --s_current.ticks;
+        if (s_current.ticks == 0) s_gap_ticks = 1; /* one scheduler tick OFF between pulses */
     } else {
         if (s_heartbeat_ticks == 0 && s_heartbeat_due) {
             s_heartbeat_due = false;
@@ -222,7 +230,7 @@ void status_led_manager_enqueue(status_led_color_id_t color, uint16_t duration_m
     const pulse_t item = {.color = (uint8_t)color, .ticks = ms_to_ticks(duration_ms)};
     portENTER_CRITICAL(&s_lock);
     if (s_count == FIFO_LEN) {
-        s_head = (uint8_t)((s_head + 1) % FIFO_LEN); /* discard oldest */
+        s_head = (uint8_t)((s_head + 1) % FIFO_LEN);
         --s_count;
     }
     const uint8_t tail = (uint8_t)((s_head + s_count) % FIFO_LEN);
