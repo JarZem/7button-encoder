@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+#define STATUS_LED_COLOR_TABLE_SIZE 64
+
 typedef enum {
     STATUS_LED_COLOR_OFF = 0,
     STATUS_LED_COLOR_GREEN,
@@ -49,7 +51,11 @@ esp_err_t status_led_manager_init(const status_led_manager_config_t *config);
 /* FIFO of short indications. When full, the oldest entry is discarded. */
 void status_led_manager_enqueue(status_led_color_id_t color, uint16_t duration_ms);
 
-/* Persistent/priority states. Highest active priority wins over queued pulses and heartbeat. */
+/*
+ * Persistent START/STOP state. This is intentionally explicit instead of packing
+ * control bits into the color byte: one call starts a long-running blink and one
+ * call stops/replaces it. The scheduler does not enqueue repeated pulses.
+ */
 void status_led_manager_set_mode(uint8_t slot, bool active, status_led_color_id_t color,
                                  uint16_t blink_period_ms, uint8_t priority);
 
