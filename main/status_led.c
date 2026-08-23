@@ -1,7 +1,6 @@
 #include "status_led.h"
 
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "ota_service.h"
 #include "pins.h"
 #include "status_led_manager.h"
@@ -14,15 +13,6 @@
 
 static const char *TAG = "status_led";
 static uint8_t s_last_ota_status = 0xff;
-
-static status_led_color_id_t alternating_color(status_led_color_id_t first,
-                                                status_led_color_id_t second,
-                                                uint32_t half_period_ms)
-{
-    if (half_period_ms == 0) return first;
-    const uint64_t now_ms = (uint64_t)esp_timer_get_time() / 1000ULL;
-    return ((now_ms / half_period_ms) & 1ULL) == 0 ? first : second;
-}
 
 static void indicate_ota_status_transition(uint8_t status)
 {
@@ -42,10 +32,12 @@ static void indicate_ota_status_transition(uint8_t status)
             status_led_manager_enqueue(STATUS_LED_COLOR_RED, 300);
             break;
         case ZIGBEE_OTA_STATUS_FW_UPDATE_COMPLETE:
+            status_led_manager_enqueue(STATUS_LED_COLOR_WHITE, 200);
             status_led_manager_enqueue(STATUS_LED_COLOR_GREEN, 300);
             break;
         case ZIGBEE_OTA_STATUS_FW_UPDATE_ERROR:
         case ZIGBEE_OTA_STATUS_FW_VERIFY_ERROR:
+            status_led_manager_enqueue(STATUS_LED_COLOR_WHITE, 200);
             status_led_manager_enqueue(STATUS_LED_COLOR_RED, 300);
             break;
         case ZIGBEE_OTA_STATUS_FW_SKIPPED:
@@ -69,20 +61,10 @@ static bool ota_external_state(status_led_external_state_t *state, void *ctx)
             *state = (status_led_external_state_t){true, STATUS_LED_COLOR_MAGENTA, 300, 85};
             return true;
         case OTA_STATE_DOWNLOADING:
-            *state = (status_led_external_state_t){
-                true,
-                alternating_color(STATUS_LED_COLOR_WHITE, STATUS_LED_COLOR_BLUE, 250),
-                0,
-                90,
-            };
+            *state = (status_led_external_state_t){true, STATUS_LED_COLOR_WHITE, 250, 90};
             return true;
         case OTA_STATE_VERIFYING:
-            *state = (status_led_external_state_t){
-                true,
-                alternating_color(STATUS_LED_COLOR_WHITE, STATUS_LED_COLOR_BLUE, 150),
-                0,
-                90,
-            };
+            *state = (status_led_external_state_t){true, STATUS_LED_COLOR_BLUE, 200, 90};
             return true;
         case OTA_STATE_SUCCESS:
         case OTA_STATE_FAILED:
