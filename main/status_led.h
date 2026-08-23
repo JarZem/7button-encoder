@@ -12,3 +12,7 @@ void status_led_indicate_ha_command(void);
 void status_led_indicate_ha_publish(void);
 void status_led_indicate_provision_step(void);
 void status_led_fatal(void);
+
+/* Blocks only WS2812/RMT output; timers/FIFO continue running. Calls may be nested. */
+void status_led_block_rf_critical(void);
+void status_led_unblock_rf_critical(void);
