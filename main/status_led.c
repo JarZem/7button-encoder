@@ -28,12 +28,10 @@ static bool ota_external_state(status_led_external_state_t *state, void *ctx)
         case OTA_STATE_VERIFYING:
             *state = (status_led_external_state_t){true, STATUS_LED_COLOR_BLUE, 200, 90};
             return true;
-        case OTA_STATE_SUCCESS:
-            *state = (status_led_external_state_t){true, STATUS_LED_COLOR_GREEN, 200, 90};
-            return true;
         case OTA_STATE_FAILED:
             *state = (status_led_external_state_t){true, STATUS_LED_COLOR_RED, 200, 95};
             return true;
+        case OTA_STATE_SUCCESS:
         case OTA_STATE_IDLE:
         default:
             return false;
@@ -90,23 +88,24 @@ void status_led_set_failure(bool failed)
 
 void status_led_indicate_local_activity(void)
 {
-    status_led_manager_enqueue(STATUS_LED_COLOR_GREEN, 200);
+    status_led_manager_enqueue(STATUS_LED_COLOR_PURPLE, 200);
 }
 
+/* Any command/data received by the ESP from HA/Zigbee. */
 void status_led_indicate_ha_command(void)
 {
     status_led_manager_enqueue(STATUS_LED_COLOR_YELLOW, 200);
 }
 
+/* Any application data published/sent by the ESP. */
 void status_led_indicate_ha_publish(void)
 {
-    status_led_manager_enqueue(STATUS_LED_COLOR_GREEN, 200);
-    status_led_manager_enqueue(STATUS_LED_COLOR_YELLOW, 200);
+    status_led_manager_enqueue(STATUS_LED_COLOR_CYAN, 200);
 }
 
+/* Provisioning frames are already indicated by the generic RX/TX indications. */
 void status_led_indicate_provision_step(void)
 {
-    status_led_manager_enqueue(STATUS_LED_COLOR_MAGENTA, 600);
 }
 
 void status_led_fatal(void)
