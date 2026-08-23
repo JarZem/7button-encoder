@@ -495,6 +495,13 @@ void zigbee_minimal_apply_state(const device_state_t *state, bool ota_enabled, b
     (void)ota_enabled;
     if (state == NULL) return;
 
+    bool previous_endpoint_on[ZB_ENDPOINT_COUNT];
+    for (uint8_t i = 0; i < ZB_ENDPOINT_COUNT; ++i) {
+        previous_endpoint_on[i] = s_endpoint_on[i];
+    }
+    const uint8_t previous_level = s_level_current;
+    const uint16_t previous_color_temperature = s_color_temperature_mired;
+
     for (uint8_t i = 0; i < ZB_SWITCH_COUNT; ++i) {
         s_endpoint_on[i] = (state->switches & (1U << i)) != 0;
     }
@@ -509,7 +516,29 @@ void zigbee_minimal_apply_state(const device_state_t *state, bool ota_enabled, b
     s_level_current = percent_to_level(s_brightness_percent);
     s_color_temperature_mired = kelvin_to_mired(s_white_temperature_kelvin);
     s_color_temperature_startup_mired = s_color_temperature_mired;
-    sync_endpoint_attrs(report);
+
+    for (uint8_t i = 0; i < ZB_ENDPOINT_COUNT; ++i) {
+        set_attr_locked(s_switch_endpoints[i], ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+                        ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, &s_endpoint_on[i]);
+        if (report && previous_endpoint_on[i] != s_endpoint_on[i]) {
+            report_attr(s_switch_endpoints[i], ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+                        ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID);
+        }
+    }
+
+    set_attr_locked(ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
+                    ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, &s_level_current);
+    if (report && previous_level != s_level_current) {
+        report_attr(ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
+                    ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID);
+    }
+
+    set_attr_locked(ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                    ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, &s_color_temperature_mired);
+    if (report && previous_color_temperature != s_color_temperature_mired) {
+        report_attr(ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                    ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID);
+    }
 }
 
 void zigbee_minimal_request_repair(void)
