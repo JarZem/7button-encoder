@@ -23,12 +23,13 @@ static void indicate_ota_status_transition(uint8_t status)
 
     switch ((zigbee_ota_status_t)status) {
         case ZIGBEE_OTA_STATUS_PROVISIONING_COMPLETE:
-            status_led_manager_enqueue(STATUS_LED_COLOR_BLUE, 200);
+            /* Provisioning terminal sequence is intentionally distinct from firmware OTA. */
+            status_led_manager_enqueue(STATUS_LED_COLOR_MAGENTA, 200);
             status_led_manager_enqueue(STATUS_LED_COLOR_GREEN, 250);
             break;
         case ZIGBEE_OTA_STATUS_PROVISIONING_ERROR:
         case ZIGBEE_OTA_STATUS_PROVISIONING_TIMEOUT:
-            status_led_manager_enqueue(STATUS_LED_COLOR_BLUE, 200);
+            status_led_manager_enqueue(STATUS_LED_COLOR_MAGENTA, 200);
             status_led_manager_enqueue(STATUS_LED_COLOR_RED, 300);
             break;
         case ZIGBEE_OTA_STATUS_FW_UPDATE_COMPLETE:
