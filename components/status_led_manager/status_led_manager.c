@@ -21,7 +21,7 @@ typedef struct {
 } mode_t;
 
 static const char *TAG = "status_led_mgr";
-static const rgb_t COLORS[STATUS_LED_COLOR_COUNT] = {
+static const rgb_t COLORS[STATUS_LED_COLOR_TABLE_SIZE] = {
     [STATUS_LED_COLOR_OFF]     = {0, 0, 0},
     [STATUS_LED_COLOR_GREEN]   = {0, 24, 0},
     [STATUS_LED_COLOR_YELLOW]  = {24, 18, 0},
@@ -127,7 +127,7 @@ static uint8_t next_nonpriority_color(void)
     if (s_current.ticks > 0) {
         color = s_current.color;
         --s_current.ticks;
-        if (s_current.ticks == 0) s_gap_ticks = 1; /* one scheduler tick OFF between pulses */
+        if (s_current.ticks == 0) s_gap_ticks = 1;
     } else {
         if (s_heartbeat_ticks == 0 && s_heartbeat_due) {
             s_heartbeat_due = false;
@@ -144,7 +144,7 @@ static uint8_t next_nonpriority_color(void)
 
 static void render_color(uint8_t color)
 {
-    if (color >= STATUS_LED_COLOR_COUNT || !s_strip || !s_io_mutex) return;
+    if (color >= STATUS_LED_COLOR_TABLE_SIZE || !s_strip || !s_io_mutex) return;
     if (xSemaphoreTake(s_io_mutex, 0) != pdTRUE) return;
 
     bool blocked;
@@ -218,15 +218,16 @@ esp_err_t status_led_manager_init(const status_led_manager_config_t *config)
     render_color(STATUS_LED_COLOR_OFF);
     if ((err = esp_timer_start_periodic(s_scheduler_timer, (uint64_t)s_cfg.scheduler_period_ms * 1000ULL)) != ESP_OK) return err;
     if ((err = esp_timer_start_periodic(s_heartbeat_timer, (uint64_t)s_cfg.heartbeat_period_ms * 1000ULL)) != ESP_OK) return err;
-    ESP_LOGI(TAG, "portable LED manager active gpio=%d fifo=%u heartbeat=%lums scheduler=%lums",
-             s_cfg.gpio_num, FIFO_LEN, (unsigned long)s_cfg.heartbeat_period_ms,
+    ESP_LOGI(TAG, "portable LED manager active gpio=%d fifo=%u colors=%u heartbeat=%lums scheduler=%lums",
+             s_cfg.gpio_num, FIFO_LEN, STATUS_LED_COLOR_TABLE_SIZE,
+             (unsigned long)s_cfg.heartbeat_period_ms,
              (unsigned long)s_cfg.scheduler_period_ms);
     return ESP_OK;
 }
 
 void status_led_manager_enqueue(status_led_color_id_t color, uint16_t duration_ms)
 {
-    if (!s_initialized || color <= STATUS_LED_COLOR_OFF || color >= STATUS_LED_COLOR_COUNT) return;
+    if (!s_initialized || color <= STATUS_LED_COLOR_OFF || color >= STATUS_LED_COLOR_TABLE_SIZE) return;
     const pulse_t item = {.color = (uint8_t)color, .ticks = ms_to_ticks(duration_ms)};
     portENTER_CRITICAL(&s_lock);
     if (s_count == FIFO_LEN) {
@@ -243,7 +244,7 @@ void status_led_manager_set_mode(uint8_t slot, bool active, status_led_color_id_
                                  uint16_t blink_period_ms, uint8_t priority)
 {
     if (slot >= STATUS_LED_MODE_SLOTS) return;
-    if (color >= STATUS_LED_COLOR_COUNT) color = STATUS_LED_COLOR_OFF;
+    if (color >= STATUS_LED_COLOR_TABLE_SIZE) color = STATUS_LED_COLOR_OFF;
     portENTER_CRITICAL(&s_lock);
     s_modes[slot].active = active;
     s_modes[slot].color = (uint8_t)color;
