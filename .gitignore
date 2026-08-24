@@ -55,3 +55,8 @@ secrets.*
 # ESP-IDF generated configuration; maintain sdkconfig.defaults only.
 sdkconfig
 sdkconfig.old
+
+# Local/generated project state
+.jarzem_ota/identity.json
+esp_target_session.json
+project.bat
