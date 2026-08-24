@@ -19,6 +19,20 @@
 
 static const char *TAG = "remote_control";
 
+static void confirm_running_ota_image(void)
+{
+#if CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t state;
+    esp_err_t err = esp_ota_get_state_partition(running, &state);
+
+    if (err == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY) {
+        ESP_ERROR_CHECK(esp_ota_mark_app_valid_cancel_rollback());
+        ESP_LOGI(TAG, "OTA image confirmed VALID");
+    }
+#endif
+}
+
 static void log_partition_info(void)
 {
     const esp_partition_t *running = esp_ota_get_running_partition();
@@ -92,6 +106,7 @@ void app_main(void)
     BaseType_t created = xTaskCreate(app_event_task, "app_event", 4096, NULL, 8, NULL);
     ESP_ERROR_CHECK(created == pdPASS ? ESP_OK : ESP_FAIL);
     zigbee_minimal_init();
+    confirm_running_ota_image();
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -120,6 +135,20 @@ void app_main(void)
 #include "nvs_flash.h"
 
 static const char *TAG = "remote_control";
+
+static void confirm_running_ota_image(void)
+{
+#if CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t state;
+    esp_err_t err = esp_ota_get_state_partition(running, &state);
+
+    if (err == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY) {
+        FATAL_ERROR_CHECK(esp_ota_mark_app_valid_cancel_rollback());
+        ESP_LOGI(TAG, "OTA image confirmed VALID");
+    }
+#endif
+}
 
 static const char *event_name(input_event_type_t type)
 {
@@ -172,6 +201,7 @@ void app_main(void)
     state_init();
     zigbee_init();
     input_init();
+    confirm_running_ota_image();
 
     ESP_LOGI(TAG, "Remote control spuštěn");
 
