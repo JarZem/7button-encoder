@@ -14,6 +14,12 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set
 
+# Keep the built-in USB Serial/JTAG block enabled. When automatic light sleep is
+# enabled, hold ESP_PM_NO_LIGHT_SLEEP while a host is connected so the console
+# and JTAG transport stay responsive.
+CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+
 # Keep ESP-IDF application logging enabled on the primary console.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3
