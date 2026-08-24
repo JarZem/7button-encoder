@@ -52,5 +52,5 @@ secrets.*
 # Generated docs if je nechceš verzovat
 *.md
 
-sdkconfig
+# sdkconfig is intentionally versioned for reproducible ESP-IDF builds.
 sdkconfig.old
