@@ -1,5 +1,50 @@
 #include "sdkconfig.h"
 
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+
+static int usb_log_vprintf(const char *format, va_list args)
+{
+    char buffer[768];
+    int len = vsnprintf(buffer, sizeof(buffer), format, args);
+    if (len <= 0) {
+        return len;
+    }
+
+    size_t write_len = (size_t)len;
+    if (write_len >= sizeof(buffer)) {
+        write_len = sizeof(buffer) - 1;
+    }
+
+    (void)usb_serial_jtag_write_bytes(buffer, write_len, pdMS_TO_TICKS(100));
+    return len;
+}
+
+static void init_builtin_usb_console(void)
+{
+    if (!usb_serial_jtag_is_driver_installed()) {
+        usb_serial_jtag_driver_config_t config = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+        config.tx_buffer_size = 2048;
+        config.rx_buffer_size = 256;
+        ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&config));
+    }
+
+    usb_serial_jtag_vfs_use_driver();
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    esp_log_set_vprintf(usb_log_vprintf);
+
+    static const char marker[] = "USB_SERIAL_JTAG_CONSOLE_READY\r\n";
+    (void)usb_serial_jtag_write_bytes(marker, sizeof(marker) - 1, pdMS_TO_TICKS(100));
+    (void)usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(250));
+}
+
 #if CONFIG_APP_ZIGBEE_MINIMAL_TEST
 
 #include "event_bus.h"
@@ -11,9 +56,7 @@
 #include "zigbee_minimal.h"
 
 #include "esp_app_desc.h"
-#include "esp_log.h"
 #include "esp_ota_ops.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
@@ -72,6 +115,8 @@ static void app_event_task(void *arg)
 
 void app_main(void)
 {
+    init_builtin_usb_console();
+
     status_led_init();
     status_led_indicate_boot();
 
@@ -113,9 +158,7 @@ void app_main(void)
 #include "fatal_error.h"
 
 #include "esp_app_desc.h"
-#include "esp_log.h"
 #include "esp_ota_ops.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
@@ -153,6 +196,8 @@ static void log_partition_info(void)
 
 void app_main(void)
 {
+    init_builtin_usb_console();
+
     status_led_init();
     status_led_indicate_boot();
 
