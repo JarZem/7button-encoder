@@ -5,22 +5,24 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_ota_16mb.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions_ota_16mb.csv"
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
-# ESP32-C6 built-in USB Serial/JTAG is the primary ESP-IDF console.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-# CONFIG_ESP_CONSOLE_UART_DEFAULT is not set
+# Keep the standard ESP-IDF UART console as primary, but mirror all console
+# output to the ESP32-C6 built-in USB Serial/JTAG interface. The external UART
+# bridge does not need to be connected; idf.py monitor can use the USB/JTAG COM.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
 # CONFIG_ESP_CONSOLE_UART_CUSTOM is not set
 # CONFIG_ESP_CONSOLE_USB_CDC is not set
 # CONFIG_ESP_CONSOLE_NONE is not set
-CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
-# CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set
+# CONFIG_ESP_CONSOLE_SECONDARY_NONE is not set
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 
 # Keep the built-in USB Serial/JTAG block enabled. When automatic light sleep is
-# enabled, hold ESP_PM_NO_LIGHT_SLEEP while a host is connected so the console
-# and JTAG transport stay responsive.
+# enabled, hold ESP_PM_NO_LIGHT_SLEEP while a host is connected so the USB
+# console/JTAG transport stays responsive.
 CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y
 CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
 
-# Keep ESP-IDF application logging enabled on the primary console.
+# Keep ESP-IDF application logging enabled.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3
 CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
