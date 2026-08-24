@@ -384,6 +384,8 @@ static esp_err_t privilege_handler(const esp_zb_zcl_privilege_command_message_t 
         if (s_color_temperature_mired < ZB_MIN_MIREDS) s_color_temperature_mired = ZB_MIN_MIREDS;
         if (s_color_temperature_mired > ZB_MAX_MIREDS) s_color_temperature_mired = ZB_MAX_MIREDS;
         s_white_temperature_kelvin = mired_to_kelvin(s_color_temperature_mired);
+        report_attr(ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                    ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID);
         publish_input_event(INPUT_EVENT_ZIGBEE_WHITE_TEMP_SET, 0, s_white_temperature_kelvin);
     }
     return ESP_OK;
