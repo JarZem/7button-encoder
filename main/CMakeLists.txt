@@ -13,7 +13,6 @@ if(CONFIG_APP_ZIGBEE_MINIMAL_TEST)
         INCLUDE_DIRS "."
         REQUIRES
             esp_driver_gpio
-            esp_driver_usb_serial_jtag
             esp_timer
             nvs_flash
             app_update
