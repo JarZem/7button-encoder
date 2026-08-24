@@ -1,24 +1,16 @@
 #include "debug_console.h"
 
-#include <stdbool.h>
 #include <stdio.h>
-#include "driver/usb_serial_jtag.h"
-
-static bool debug_console_is_active(void)
-{
-    return usb_serial_jtag_is_connected();
-}
 
 void debug_console_init(void)
 {
-    if (debug_console_is_active()) {
-        printf("DEBUG usb_serial_jtag=connected\n");
-    }
+    printf("DEBUG console=usb_serial_jtag\n");
+    fflush(stdout);
 }
 
 void debug_console_publish_state(const char *reason, const device_state_t *state)
 {
-    if (state == NULL || !debug_console_is_active()) {
+    if (state == NULL) {
         return;
     }
 
@@ -36,11 +28,12 @@ void debug_console_publish_state(const char *reason, const device_state_t *state
            state->brightness,
            state->white_temperature,
            state->rs232_enabled ? "on" : "off");
+    fflush(stdout);
 }
 
 void debug_console_publish_ha_change(const device_state_t *state)
 {
-    if (state == NULL || !debug_console_is_active()) {
+    if (state == NULL) {
         return;
     }
 
@@ -49,17 +42,15 @@ void debug_console_publish_ha_change(const device_state_t *state)
            state->brightness,
            state->white_temperature,
            state->rs232_enabled ? "on" : "off");
+    fflush(stdout);
 }
 
 void debug_console_publish_ota_window(bool active, uint32_t timeout_seconds)
 {
-    if (!debug_console_is_active()) {
-        return;
-    }
-
     printf("OTA_WINDOW active=%s timeout_seconds=%lu\n",
            active ? "true" : "false",
            (unsigned long)timeout_seconds);
+    fflush(stdout);
 }
 
 void debug_console_publish_zigbee_pairing(const char *event,
@@ -70,10 +61,6 @@ void debug_console_publish_zigbee_pairing(const char *event,
                                           uint8_t current_channel,
                                           const char *status)
 {
-    if (!debug_console_is_active()) {
-        return;
-    }
-
     printf("ZIGBEE_PAIRING event=%s joined=%s factory_new=%s steering=%s "
            "channel_mask=0x%08lx current_channel=%u status=%s\n",
            event != NULL ? event : "state",
@@ -83,4 +70,5 @@ void debug_console_publish_zigbee_pairing(const char *event,
            (unsigned long)channel_mask,
            current_channel,
            status != NULL ? status : "unknown");
+    fflush(stdout);
 }
