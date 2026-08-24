@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 
-file(READ "${CMAKE_CURRENT_LIST_DIR}/firmware_version.txt" PROJECT_VER)
-string(STRIP "${PROJECT_VER}" PROJECT_VER)
+if(NOT DEFINED PROJECT_VER OR PROJECT_VER STREQUAL "")
+    file(READ "${CMAKE_CURRENT_LIST_DIR}/firmware_version.txt" PROJECT_VER)
+    string(STRIP "${PROJECT_VER}" PROJECT_VER)
+endif()
 
 # BEGIN JARZEM SECURE OTA - generated, do not edit
 set(EXTRA_COMPONENT_DIRS
