@@ -5,9 +5,7 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_ota_16mb.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions_ota_16mb.csv"
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
-# Keep development and production hardware identical: all ESP-IDF console
-# output (ESP_LOGx/printf/stdout/stderr) uses the ESP32-C6 built-in
-# USB Serial/JTAG controller, never the external UART bridge.
+# ESP32-C6 built-in USB Serial/JTAG is the primary ESP-IDF console.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # CONFIG_ESP_CONSOLE_UART_DEFAULT is not set
 # CONFIG_ESP_CONSOLE_UART_CUSTOM is not set
@@ -15,6 +13,12 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # CONFIG_ESP_CONSOLE_NONE is not set
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set
+
+# Keep ESP-IDF application logging enabled on the primary console.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
+CONFIG_LOG_MAXIMUM_LEVEL=3
 
 CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
 CONFIG_FREERTOS_HZ=1000
