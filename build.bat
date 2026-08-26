@@ -50,10 +50,6 @@ if not exist "sdkconfig" (
     if errorlevel 1 goto :error
 )
 
-echo [OTA] Overuji registraci existujiciho device certifikatu...
-python tools\register_existing_certificate.py
-if errorlevel 1 goto :error
-
 echo [IDF] Reconfigure...
 call idf.py reconfigure
 if errorlevel 1 goto :error
