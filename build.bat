@@ -50,6 +50,16 @@ if not exist "sdkconfig" (
     if errorlevel 1 goto :error
 )
 
+echo [OTA] Overuji registraci existujiciho device certifikatu...
+python tools\register_existing_certificate.py
+if errorlevel 1 goto :error
+
+if not exist "sdkconfig" (
+    echo [IDF] Nastavuji target esp32c6...
+    call idf.py set-target esp32c6
+    if errorlevel 1 goto :error
+)
+
 echo [IDF] Reconfigure...
 call idf.py reconfigure
 if errorlevel 1 goto :error
