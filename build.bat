@@ -40,7 +40,7 @@ if errorlevel 1 goto :error
 git submodule update --init --recursive
 if errorlevel 1 goto :error
 
-echo [IDF] Nastavuji USB konzoli...
+echo [IDF] Obnovuji debug konzoli UART + USB Serial/JTAG mirror...
 python tools\enforce_usb_console.py
 if errorlevel 1 goto :error
 
@@ -49,10 +49,6 @@ if not exist "sdkconfig" (
     call idf.py set-target esp32c6
     if errorlevel 1 goto :error
 )
-
-echo [IDF] Reconfigure...
-call idf.py reconfigure
-if errorlevel 1 goto :error
 
 echo [BUILD] Sestavuji firmware...
 call idf.py build
