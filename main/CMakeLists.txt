@@ -52,3 +52,6 @@ else()
             status_led_manager
     )
 endif()
+
+# esp-zigbee-lib 2.x: hlavicky compat (ZB_SDK_1xx) vypisuji #warning o zastaralem API. Presun na ezbee/*.h je zatim odlozen.
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=cpp)

@@ -23,7 +23,7 @@
 #include "zcl/esp_zigbee_zcl_color_control.h"
 #include "zcl/esp_zigbee_zcl_command.h"
 
-#if !defined ZB_ED_ROLE
+#if !defined(ZB_ED_ROLE) && !defined(CONFIG_ZB_ZED)
 #error "Remote control must be built as Zigbee End Device."
 #endif
 
