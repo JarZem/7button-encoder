@@ -29,10 +29,9 @@
 
 static const char *TAG = "zigbee";
 
-#define ZB_ENDPOINT_COUNT        9
+#define ZB_ENDPOINT_COUNT        8
 #define ZB_SWITCH_COUNT          6
 #define ZB_LIGHT_ENDPOINT        8
-#define ZB_RS232_ENDPOINT        9
 #define ZB_DEFAULT_CHANNEL       CONFIG_APP_ZIGBEE_DEFAULT_CHANNEL
 #define ZB_SCAN_CHANNEL_MASK     CONFIG_APP_ZIGBEE_SCAN_CHANNEL_MASK
 #define ZB_FAST_ATTEMPTS         CONFIG_APP_ZIGBEE_FAST_STEERING_ATTEMPTS
@@ -202,7 +201,6 @@ static void cache_state(const device_state_t *state)
     const bool any = (state->switches & DEVICE_SWITCH_MASK) != 0;
     s_on_off[6] = any;
     s_on_off[7] = any;
-    s_on_off[8] = state->rs232_enabled;
     s_level = percent_to_level(state->brightness);
     s_color_temp = kelvin_to_mired(state->white_temperature);
     s_color_temp_startup = s_color_temp;
@@ -309,8 +307,6 @@ static esp_err_t attribute_handler(const esp_zb_zcl_set_attr_value_message_t *me
         if (endpoint <= ZB_SWITCH_COUNT) state_set_switch(endpoint, on, STATE_CHANGE_ZIGBEE);
         else if (endpoint == 7 || endpoint == ZB_LIGHT_ENDPOINT) {
             if (on) state_restore_last(STATE_CHANGE_ZIGBEE); else state_all_off(STATE_CHANGE_ZIGBEE);
-        } else if (endpoint == ZB_RS232_ENDPOINT) {
-            state_set_rs232_enabled_source(on, STATE_CHANGE_ZIGBEE);
         }
         return ESP_OK;
     }
@@ -432,9 +428,18 @@ static void zigbee_task(void *arg)
 
     ESP_LOGI(TAG, "registering application endpoints 1..9 plus OTA endpoints 10/11");
     ESP_ERROR_CHECK(jarzem_ota_device_register(ep_list));
-    ESP_ERROR_CHECK(esp_zb_zcl_add_privilege_command(
-        ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-        ESP_ZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_COLOR_TEMPERATURE));
+    {
+        /* esp-zigbee-lib 2.x does not support privilege commands (the compat layer returns
+         * ESP_ERR_NOT_SUPPORTED); keep this non-fatal. Verify colour temperature handling on hardware. */
+        const esp_err_t privilege_err = esp_zb_zcl_add_privilege_command(
+            ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_COLOR_TEMPERATURE);
+        if (privilege_err == ESP_ERR_NOT_SUPPORTED) {
+            ESP_LOGW(TAG, "privilege command MoveToColorTemperature not supported by esp-zigbee-lib 2.x");
+        } else {
+            ESP_ERROR_CHECK(privilege_err);
+        }
+    }
     jarzem_ota_action_handler_register(action_handler);
     esp_zb_set_rx_on_when_idle(true);
     apply_channel_mask(channel_mask(s_fast_pair_channel));
@@ -461,11 +466,6 @@ void zigbee_request_repair(void)
     if (!s_started || s_manual_repair_requested) return;
     s_manual_repair_requested = true;
     esp_zb_scheduler_alarm((esp_zb_callback_t)repair_cb, 0, 0);
-}
-
-void zigbee_handle_rs232_enabled_from_ha(bool enabled)
-{
-    state_set_rs232_enabled_source(enabled, STATE_CHANGE_ZIGBEE);
 }
 
 void zigbee_publish_communication_error(bool communication_error, const void *diagnostics)

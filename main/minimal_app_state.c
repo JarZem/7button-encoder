@@ -41,10 +41,9 @@ static bool any_switch_on(void)
 static void log_state(const char *reason)
 {
     ESP_LOGI(TAG,
-             "STATE reason=%s switches=0x%02x rs232=%s light=%s brightness=%u%% white_temperature=%uK",
+             "STATE reason=%s switches=0x%02x light=%s brightness=%u%% white_temperature=%uK",
              reason,
              s_state.switches,
-             s_state.rs232_enabled ? "ON" : "OFF",
              any_switch_on() ? "ON" : "OFF",
              s_state.brightness,
              s_state.white_temperature);
@@ -109,13 +108,6 @@ static void set_white_temperature(uint16_t kelvin, const char *reason)
     commit_state_change(reason);
 }
 
-static void set_rs232(bool enabled, const char *reason)
-{
-    if (s_state.rs232_enabled == enabled) return;
-    s_state.rs232_enabled = enabled;
-    commit_state_change(reason);
-}
-
 static void all_off(const char *reason)
 {
     if (any_switch_on()) s_state.last_active_switches = s_state.switches & DEVICE_SWITCH_MASK;
@@ -166,7 +158,6 @@ void minimal_app_state_init(void)
         .last_active_switches = DEVICE_SWITCH_MASK,
         .brightness = DEVICE_BRIGHTNESS_DEFAULT,
         .white_temperature = DEVICE_WHITE_TEMP_DEFAULT,
-        .rs232_enabled = false,
     };
     storage_load(&s_state);
     s_state.switches &= DEVICE_SWITCH_MASK;
@@ -203,9 +194,6 @@ void minimal_app_state_handle_input_event(const input_event_t *event)
             break;
         case INPUT_EVENT_ZIGBEE_WHITE_TEMP_SET:
             set_white_temperature((uint16_t)event->value, "ha_white_temperature");
-            break;
-        case INPUT_EVENT_ZIGBEE_RS232_SET:
-            set_rs232(event->value != 0, "ha_rs232");
             break;
         default:
             break;

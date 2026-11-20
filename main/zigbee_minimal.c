@@ -30,10 +30,9 @@
 static const char *TAG = "zb_minimal";
 
 #define ZB_FIRST_SWITCH_ENDPOINT 1
-#define ZB_ENDPOINT_COUNT        9
+#define ZB_ENDPOINT_COUNT        8
 #define ZB_SWITCH_COUNT          6
 #define ZB_LIGHT_ENDPOINT        8
-#define ZB_RS232_ENDPOINT        9
 #define ZB_MIN_DEFAULT_CHANNEL   CONFIG_APP_ZIGBEE_DEFAULT_CHANNEL
 #define ZB_MIN_SCAN_CHANNEL_MASK CONFIG_APP_ZIGBEE_SCAN_CHANNEL_MASK
 #define ZB_MIN_FAST_ATTEMPTS     CONFIG_APP_ZIGBEE_FAST_STEERING_ATTEMPTS
@@ -66,7 +65,7 @@ static uint16_t s_color_temperature_mired = 250;
 static uint16_t s_color_temperature_min_mired = ZB_MIN_MIREDS;
 static uint16_t s_color_temperature_max_mired = ZB_MAX_MIREDS;
 static uint16_t s_color_temperature_startup_mired = 250;
-static const uint8_t s_switch_endpoints[ZB_ENDPOINT_COUNT] = {1,2,3,4,5,6,7,8,9};
+static const uint8_t s_switch_endpoints[ZB_ENDPOINT_COUNT] = {1,2,3,4,5,6,7,8};
 
 #define ESP_ZB_MIN_ZED_CONFIG() { \
     .esp_zb_role = ESP_ZB_DEVICE_TYPE_ED, \
@@ -339,7 +338,6 @@ static esp_err_t attribute_handler(const esp_zb_zcl_set_attr_value_message_t *me
                     ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID);
         if (index < ZB_SWITCH_COUNT) publish_input_event(INPUT_EVENT_ZIGBEE_SWITCH_SET, (uint8_t)(index + 1), on);
         else if (index == 6 || index == 7) publish_input_event(INPUT_EVENT_ZIGBEE_LIGHT_ONOFF_SET, 0, on);
-        else if (index == 8) publish_input_event(INPUT_EVENT_ZIGBEE_RS232_SET, 0, on);
         return ESP_OK;
     }
 
@@ -479,9 +477,18 @@ static void zigbee_task(void *arg)
 
     ESP_LOGI(TAG, "registering application endpoints 1..9 plus OTA endpoints 10/11");
     ESP_ERROR_CHECK(jarzem_ota_device_register(ep_list));
-    ESP_ERROR_CHECK(esp_zb_zcl_add_privilege_command(
-        ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-        ESP_ZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_COLOR_TEMPERATURE));
+    {
+        /* esp-zigbee-lib 2.x does not support privilege commands (the compat layer returns
+         * ESP_ERR_NOT_SUPPORTED); keep this non-fatal. Verify colour temperature handling on hardware. */
+        const esp_err_t privilege_err = esp_zb_zcl_add_privilege_command(
+            ZB_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_COLOR_TEMPERATURE);
+        if (privilege_err == ESP_ERR_NOT_SUPPORTED) {
+            ESP_LOGW(TAG, "privilege command MoveToColorTemperature not supported by esp-zigbee-lib 2.x");
+        } else {
+            ESP_ERROR_CHECK(privilege_err);
+        }
+    }
     jarzem_ota_action_handler_register(action_handler);
 
     esp_zb_set_rx_on_when_idle(true);
@@ -510,7 +517,6 @@ void zigbee_minimal_apply_state(const device_state_t *state, bool ota_enabled, b
     const bool any_on = (state->switches & ((1U << ZB_SWITCH_COUNT) - 1U)) != 0;
     s_endpoint_on[6] = any_on;
     s_endpoint_on[7] = any_on;
-    s_endpoint_on[8] = state->rs232_enabled;
     s_brightness_percent = state->brightness > 100 ? 100 : state->brightness;
     s_white_temperature_kelvin = state->white_temperature;
     if (s_white_temperature_kelvin < ZB_WHITE_TEMP_MIN_K) s_white_temperature_kelvin = ZB_WHITE_TEMP_MIN_K;

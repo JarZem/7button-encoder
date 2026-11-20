@@ -1,7 +1,7 @@
 import {presets as e, access as ea} from 'zigbee-herdsman-converters/lib/exposes';
 
-const ENDPOINTS={button1:1,button2:2,button3:3,button4:4,button5:5,button6:6,button7:7,light:8,enable_rs232:9};
-const APPLICATION_ENDPOINTS=[1,2,3,4,5,6,8,9];
+const ENDPOINTS={button1:1,button2:2,button3:3,button4:4,button5:5,button6:6,button7:7,light:8};
+const APPLICATION_ENDPOINTS=[1,2,3,4,5,6,8];
 const COLOR_TEMP_MIN_MIRED=154,COLOR_TEMP_MAX_MIRED=333;
 const READBACK_DELAY_MS=120;
 const STALE_REPORT_GUARD_MS=800;
@@ -66,7 +66,7 @@ const remoteFromColorTemperature={cluster:'lightingColorCtrl',type:['attributeRe
     return Object.keys(result).length?result:undefined;
 }};
 
-const remoteToOnOff={key:['state','state_button1','state_button2','state_button3','state_button4','state_button5','state_button6','state_enable_rs232'],convertSet:async(entity,key,value,meta)=>{
+const remoteToOnOff={key:['state','state_button1','state_button2','state_button3','state_button4','state_button5','state_button6'],convertSet:async(entity,key,value,meta)=>{
     const name=endpointNameFromStateKey(key,entity,meta);
     const endpoint=endpointForName(entity,meta,name);
     const state=String(value).toUpperCase();
@@ -104,7 +104,7 @@ const definition={
     fingerprint:[{manufacturerName:'Jaros',modelID:'RemoteControl7Encoder'},{manufacturerName:'JaroslavZ',modelID:'ESP32-C6-ENC'}],
     model:'ESP32-C6-ENC',
     vendor:'Jaros',
-    description:'RemoteControl7Encoder: six output switches; button 7 is local-only master off/restore; brightness/white temperature and RS232 control',
+    description:'RemoteControl7Encoder: six output switches; button 7 is local-only master off/restore; brightness/white temperature',
     fromZigbee:[remoteFromOnOff,remoteFromBrightness,remoteFromColorTemperature],
     toZigbee:[remoteToOnOff,remoteToBrightness,remoteToColorTemperature],
     exposes:[
@@ -112,7 +112,6 @@ const definition={
         e.switch().withEndpoint('button4'),e.switch().withEndpoint('button5'),e.switch().withEndpoint('button6'),
         e.numeric('brightness',ea.ALL).withValueMin(0).withValueMax(254).withEndpoint('light'),
         e.numeric('color_temp',ea.ALL).withValueMin(COLOR_TEMP_MIN_MIRED).withValueMax(COLOR_TEMP_MAX_MIRED).withEndpoint('light'),
-        e.switch().withEndpoint('enable_rs232'),
     ],
     endpoint:()=>ENDPOINTS,
     options:[],

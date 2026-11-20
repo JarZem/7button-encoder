@@ -15,7 +15,6 @@ typedef enum {
     INPUT_EVENT_ZIGBEE_LIGHT_ONOFF_SET,
     INPUT_EVENT_ZIGBEE_BRIGHTNESS_SET,
     INPUT_EVENT_ZIGBEE_WHITE_TEMP_SET,
-    INPUT_EVENT_ZIGBEE_RS232_SET,
 } input_event_type_t;
 
 typedef struct {

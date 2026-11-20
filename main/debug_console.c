@@ -15,8 +15,7 @@ void debug_console_publish_state(const char *reason, const device_state_t *state
     }
 
     printf("STATE reason=%s switches=0x%02x switch1=%u switch2=%u switch3=%u "
-           "switch4=%u switch5=%u switch6=%u brightness=%u white_temperature=%u "
-           "rs232=%s\n",
+           "switch4=%u switch5=%u switch6=%u brightness=%u white_temperature=%u\n",
            reason != NULL ? reason : "change",
            state->switches & DEVICE_SWITCH_MASK,
            (state->switches >> 0) & 1U,
@@ -26,8 +25,7 @@ void debug_console_publish_state(const char *reason, const device_state_t *state
            (state->switches >> 4) & 1U,
            (state->switches >> 5) & 1U,
            state->brightness,
-           state->white_temperature,
-           state->rs232_enabled ? "on" : "off");
+           state->white_temperature);
     fflush(stdout);
 }
 
@@ -37,11 +35,10 @@ void debug_console_publish_ha_change(const device_state_t *state)
         return;
     }
 
-    printf("HA_CHANGE switches=0x%02x brightness=%u white_temperature=%u rs232=%s\n",
+    printf("HA_CHANGE switches=0x%02x brightness=%u white_temperature=%u\n",
            state->switches & DEVICE_SWITCH_MASK,
            state->brightness,
-           state->white_temperature,
-           state->rs232_enabled ? "on" : "off");
+           state->white_temperature);
     fflush(stdout);
 }
 

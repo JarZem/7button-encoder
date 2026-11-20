@@ -1,5 +1,11 @@
 #include "uart_transport.h"
 
+/* The HA "enable RS232" switch was removed. The inter-module UART link stays off
+ * (as it was by default) unless explicitly enabled at build time with -DUART_TRANSPORT_ENABLED=1. */
+#ifndef UART_TRANSPORT_ENABLED
+#define UART_TRANSPORT_ENABLED 0
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -281,7 +287,7 @@ static void uart_transport_task(void *arg)
         poll_uart(&parser, &parsed);
 
         const TickType_t now = xTaskGetTickCount();
-        if (s_has_latest_state && s_latest_state.rs232_enabled &&
+        if (UART_TRANSPORT_ENABLED && s_has_latest_state &&
             (s_force_send || now >= next_sync)) {
             if (s_first_send) {
                 vTaskDelay(pdMS_TO_TICKS(UART_TRANSPORT_BOOT_DELAY_MS));

@@ -30,7 +30,6 @@ static void save_timer_callback(void *arg)
     if (err == ESP_OK) err = nvs_set_u8(handle, "last", s_pending_state.last_active_switches);
     if (err == ESP_OK) err = nvs_set_u8(handle, "bright", s_pending_state.brightness);
     if (err == ESP_OK) err = nvs_set_u16(handle, "temp", s_pending_state.white_temperature);
-    if (err == ESP_OK) err = nvs_set_u8(handle, "rs232", s_pending_state.rs232_enabled ? 1 : 0);
     if (err == ESP_OK) err = nvs_commit(handle);
 
     nvs_close(handle);
@@ -38,12 +37,11 @@ static void save_timer_callback(void *arg)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Uložení stavu do NVS selhalo: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "Stav uložen do NVS: switches=0x%02x last=0x%02x brightness=%u temp=%uK rs232=%s",
+        ESP_LOGI(TAG, "Stav uložen do NVS: switches=0x%02x last=0x%02x brightness=%u temp=%uK",
                  s_pending_state.switches,
                  s_pending_state.last_active_switches,
                  s_pending_state.brightness,
-                 s_pending_state.white_temperature,
-                 s_pending_state.rs232_enabled ? "ON" : "OFF");
+                 s_pending_state.white_temperature);
     }
 }
 
@@ -77,7 +75,6 @@ void storage_load(device_state_t *state)
     if (nvs_get_u8(handle, "last", &value_u8) == ESP_OK) state->last_active_switches = value_u8;
     if (nvs_get_u8(handle, "bright", &value_u8) == ESP_OK) state->brightness = value_u8;
     if (nvs_get_u16(handle, "temp", &value_u16) == ESP_OK) state->white_temperature = value_u16;
-    if (nvs_get_u8(handle, "rs232", &value_u8) == ESP_OK) state->rs232_enabled = value_u8 != 0;
 
     nvs_close(handle);
 }

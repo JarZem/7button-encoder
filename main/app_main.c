@@ -58,7 +58,6 @@ static const char *event_name(input_event_type_t type)
         case INPUT_EVENT_ZIGBEE_LIGHT_ONOFF_SET: return "ZB_LIGHT_ONOFF_SET";
         case INPUT_EVENT_ZIGBEE_BRIGHTNESS_SET: return "ZB_BRIGHTNESS_SET";
         case INPUT_EVENT_ZIGBEE_WHITE_TEMP_SET: return "ZB_WHITE_TEMP_SET";
-        case INPUT_EVENT_ZIGBEE_RS232_SET: return "ZB_RS232_SET";
         default: return "UNKNOWN";
     }
 }
@@ -89,7 +88,7 @@ void app_main(void)
     status_led_init();
     status_led_indicate_boot();
 
-    ESP_LOGW(TAG, "STABLE ZIGBEE BUILD: inputs and delayed NVS enabled, RS232 transport disabled");
+    ESP_LOGW(TAG, "STABLE ZIGBEE BUILD: inputs and delayed NVS enabled");
 
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -162,7 +161,6 @@ static const char *event_name(input_event_type_t type)
         case INPUT_EVENT_ZIGBEE_LIGHT_ONOFF_SET: return "ZB_LIGHT_ONOFF_SET";
         case INPUT_EVENT_ZIGBEE_BRIGHTNESS_SET: return "ZB_BRIGHTNESS_SET";
         case INPUT_EVENT_ZIGBEE_WHITE_TEMP_SET: return "ZB_WHITE_TEMP_SET";
-        case INPUT_EVENT_ZIGBEE_RS232_SET: return "ZB_RS232_SET";
         default:                           return "UNKNOWN";
     }
 }

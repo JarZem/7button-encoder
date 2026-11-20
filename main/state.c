@@ -122,7 +122,6 @@ void state_init(void)
         .last_active_switches = DEVICE_SWITCH_MASK,
         .brightness = DEVICE_BRIGHTNESS_DEFAULT,
         .white_temperature = DEVICE_WHITE_TEMP_DEFAULT,
-        .rs232_enabled = false,
     };
     storage_load(&s_state);
     s_state.switches &= DEVICE_SWITCH_MASK;
@@ -161,9 +160,6 @@ void state_handle_input_event(const input_event_t *event)
             break;
         case INPUT_EVENT_ZIGBEE_WHITE_TEMP_SET:
             state_set_white_temperature((uint16_t)event->value, STATE_CHANGE_ZIGBEE);
-            break;
-        case INPUT_EVENT_ZIGBEE_RS232_SET:
-            state_set_rs232_enabled_source(event->value != 0, STATE_CHANGE_ZIGBEE);
             break;
         default:
             break;
@@ -208,13 +204,6 @@ void state_set_white_temperature(uint16_t kelvin, state_change_source_t source)
     commit_state_change(source);
 }
 
-void state_set_rs232_enabled_source(bool enabled, state_change_source_t source)
-{
-    if (s_state.rs232_enabled == enabled) return;
-    s_state.rs232_enabled = enabled;
-    commit_state_change(source);
-}
-
 void state_all_off(state_change_source_t source)
 {
     if (any_switch_on()) s_state.last_active_switches = s_state.switches & DEVICE_SWITCH_MASK;
@@ -226,9 +215,4 @@ void state_restore_last(state_change_source_t source)
     uint8_t restored = s_state.last_active_switches & DEVICE_SWITCH_MASK;
     if (restored == 0) restored = DEVICE_SWITCH_MASK;
     state_set_switch_mask(restored, source);
-}
-
-void state_set_rs232_enabled(bool enabled)
-{
-    state_set_rs232_enabled_source(enabled, STATE_CHANGE_INTERNAL);
 }
