@@ -49,8 +49,11 @@ secrets.*
 *.p12
 *.pfx
 
-# Generated docs if je nechceš verzovat
+# Generated docs if je nechceš verzovat. Projektová dokumentace se verzuje:
 *.md
+!/README.md
+!/tests.README.md
+!/tests/README.md
 
 # ESP-IDF generated configuration; maintain sdkconfig.defaults only.
 sdkconfig
